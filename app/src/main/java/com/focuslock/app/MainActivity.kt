@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import java.text.SimpleDateFormat
@@ -34,6 +35,38 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private var currentTab = 0 // 0 Home, 1 Focus, 2 Schedule, 3 Limits, 4 Settings
+
+    // v1.4 settings backup / restore via the system file picker (no storage permission needed)
+    private val exportLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) {
+                try {
+                    contentResolver.openOutputStream(uri)
+                        ?.use { it.write(Store.exportJson(this).toByteArray()) }
+                    toast("ব্যাকআপ সেভ হয়েছে")
+                } catch (e: Exception) {
+                    toast("ব্যাকআপ হয়নি: ${e.message}")
+                }
+            }
+        }
+    private val importLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    val text = contentResolver.openInputStream(uri)
+                        ?.bufferedReader()?.readText() ?: ""
+                    if (Store.importJson(this, text)) {
+                        toast("সেটিংস রিস্টোর হয়েছে")
+                        Engine.tick(this)
+                        buildUi()
+                    } else {
+                        toast("ফাইলটা ঠিকমতো পড়া যায়নি")
+                    }
+                } catch (e: Exception) {
+                    toast("রিস্টোর হয়নি: ${e.message}")
+                }
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,21 +181,23 @@ class MainActivity : AppCompatActivity() {
         return bar
     }
 
-    // ---- Tab 0: Home — live status + setup actions ----
+    // ---- Tab 0: Home — minimal permissions, live state, statistics ----
     private fun tabHome(content: LinearLayout) {
-        val statusCard = Ui.card(this)
-        statusCard.addView(Ui.cardTitle(this, "সেটআপ অবস্থা"))
-        statusCard.addView(Ui.statusRow(this, "Device Owner (সবচেয়ে কড়া)", AdminHelper.isDeviceOwner(this)))
-        statusCard.addView(Ui.statusRow(this, "Device Admin", AdminHelper.isAdminActive(this)))
-        statusCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
-        statusCard.addView(Ui.statusRow(this, "Usage Access (লিমিটের হিসাব)", AdminHelper.hasUsageAccess(this)))
-        statusCard.addView(Ui.statusRow(this, "Overlay Permission", AdminHelper.hasOverlayPermission(this)))
-        statusCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
-        setupButtons(statusCard)
-        content.addView(statusCard)
+        // Minimized (Tamim's request): only the 3 permissions the app truly
+        // needs day-to-day. Device Owner belongs to Stage B and lives in
+        // Settings; optional features ask for their permission only when used.
+        val permCard = Ui.card(this)
+        permCard.addView(Ui.cardTitle(this, "পারমিশন"))
+        permCard.addView(Ui.label(this, "মাত্র ৩টা জরুরি পারমিশন"))
+        permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
+        permCard.addView(Ui.statusRow(this, "Usage Access (লিমিট ও হিসাব)", AdminHelper.hasUsageAccess(this)))
+        permCard.addView(Ui.statusRow(this, "Overlay (শেড গার্ড)", AdminHelper.hasOverlayPermission(this)))
+        setupButtons(permCard)
+        content.addView(permCard)
 
         val nowCard = Ui.card(this)
         nowCard.addView(Ui.cardTitle(this, "এখনকার অবস্থা"))
+        nowCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
         val focusEnd = Store.focusEndMs(this)
         if (focusEnd > System.currentTimeMillis()) {
             nowCard.addView(Ui.body(this, "ফোকাস চলছে — শেষ হবে ${timeText(focusEnd)}").apply {
@@ -185,6 +220,58 @@ class MainActivity : AppCompatActivity() {
             })
         }
         content.addView(nowCard)
+
+        // ---- Statistics & report (Tamim: keep it on Home) ----
+        val statsCard = Ui.card(this)
+        statsCard.addView(Ui.cardTitle(this, "আজকের হিসাব"))
+        if (AdminHelper.hasUsageAccess(this)) {
+            val (totalMs, top) = usageSummary()
+            statsCard.addView(Ui.body(this, "মোট স্ক্রিন টাইম: ${durText(totalMs)}"))
+            for ((label, ms) in top) {
+                statsCard.addView(Ui.secondary(this, "$label — ${durText(ms)}"))
+            }
+        } else {
+            statsCard.addView(Ui.secondary(this, "স্ক্রিন টাইমের হিসাব দেখতে Usage Access পারমিশনটা লাগবে (উপরে)।"))
+        }
+        statsCard.addView(Ui.gap(this, 10))
+        statsCard.addView(Ui.body(this, "ফোকাস রিপোর্ট"))
+        statsCard.addView(Ui.secondary(this, "আজকের ফোকাস: ${Store.focusMinutesToday(this)} মিনিট"))
+        statsCard.addView(Ui.secondary(this, "গত ৭ দিনে মোট ফোকাস: ${durText(Store.focusMinutesLast7Days(this) * 60_000L)}"))
+        statsCard.addView(Ui.secondary(this, "টানা ধারা (স্ট্রিক): ${Store.focusStreakDays(this)} দিন"))
+        content.addView(statsCard)
+    }
+
+    /** Today's total screen time + top-5 apps, from UsageStats. */
+    private fun usageSummary(): Pair<Long, List<Pair<String, Long>>> {
+        return try {
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+            val start = (java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            }).timeInMillis
+            val stats = usm.queryUsageStats(
+                android.app.usage.UsageStatsManager.INTERVAL_DAILY, start, System.currentTimeMillis()
+            ) ?: return 0L to emptyList()
+            val byPkg = mutableMapOf<String, Long>()
+            for (st in stats) {
+                if (st.totalTimeInForeground > 0 && st.packageName != packageName) {
+                    byPkg[st.packageName] = (byPkg[st.packageName] ?: 0L) + st.totalTimeInForeground
+                }
+            }
+            val total = byPkg.values.sum()
+            val top = byPkg.entries.sortedByDescending { it.value }.take(5)
+                .map { appLabel(it.key) to it.value }
+            total to top
+        } catch (e: Exception) {
+            0L to emptyList()
+        }
+    }
+
+    private fun durText(ms: Long): String {
+        val mins = (ms / 60000).toInt()
+        val h = mins / 60
+        val m = mins % 60
+        return if (h > 0) "$h ঘণ্টা $m মিনিট" else "$m মিনিট"
     }
 
     // ---- Tab 1: Focus — the main feature ----
@@ -209,6 +296,105 @@ class MainActivity : AppCompatActivity() {
             })
         }
         content.addView(focusCard)
+
+        // ---- Named focus presets (v1.4): one tap starts the whole setup ----
+        val presetCard = Ui.card(this)
+        presetCard.addView(Ui.cardTitle(this, "আমার প্রিসেট"))
+        val presets = Store.focusPresets(this)
+        if (presets.isEmpty()) {
+            presetCard.addView(Ui.secondary(this, "কোনো প্রিসেট নেই। নাম দিয়ে প্রিসেট বানালে এক ট্যাপে সেই ফোকাস শুরু হবে — যেমন পড়াশোনা, ২ ঘণ্টা, বইয়ের অ্যাপ।"))
+        }
+        for (p in presets) {
+            presetCard.addView(Ui.body(this, "${p.name} — ${p.minutes} মিনিট"))
+            presetCard.addView(Ui.secondary(this,
+                if (p.allowed.isEmpty()) "সব অ্যাপ লক থাকবে"
+                else "চলবে: " + p.allowed.sorted().joinToString(", ") { appLabel(it) }
+            ))
+            presetCard.addView(Ui.primaryButton(this, "${p.name} শুরু করো") { startPreset(p) })
+            presetCard.addView(Ui.secondaryButton(this, "প্রিসেট মুছো: ${p.name}") {
+                Store.saveFocusPresets(this, Store.focusPresets(this).filter { it.name != p.name })
+                buildUi()
+            })
+        }
+        presetCard.addView(Ui.secondaryButton(this, "নতুন প্রিসেট বানাও") { addPresetFlow() })
+        content.addView(presetCard)
+
+        // ---- Notification silence during focus (v1.4) ----
+        val quietCard = Ui.card(this)
+        quietCard.addView(Ui.cardTitle(this, "নোটিফিকেশন"))
+        quietCard.addView(Ui.statusRow(this, "ফোকাস/লকের সময় নোটিফিকেশন চুপ", Store.silenceDuringLock(this)))
+        quietCard.addView(Ui.secondary(this, "চালু থাকলে ফোকাস চলাকালে Do Not Disturb নিজে থেকে অন হয়, শেষ হলে আগের অবস্থায় ফেরে। অ্যালার্ম বাজবে।"))
+        quietCard.addView(Ui.secondaryButton(this,
+            if (Store.silenceDuringLock(this)) "বন্ধ করো" else "চালু করো") { toggleSilence() })
+        content.addView(quietCard)
+    }
+
+    private fun startPreset(p: FocusPreset) {
+        AlertDialog.Builder(this)
+            .setTitle("${p.name} — ${p.minutes} মিনিট ফোকাস?")
+            .setMessage("শুরু করলে সময় শেষ হওয়ার আগে কোনোভাবেই বাতিল করা যাবে না।")
+            .setPositiveButton("শুরু করো") { _, _ ->
+                verifyPin {
+                    val nowMs = System.currentTimeMillis()
+                    Store.setFocusStartMs(this, nowMs)
+                    Store.setFocusEndMs(this, nowMs + p.minutes * 60_000L)
+                    Store.setFocusSessionAllowed(this, p.allowed)
+                    AdminHelper.applyLockTaskPackages(this, p.allowed)
+                    Store.logTamper(this, "Focus preset started: ${p.name} (${p.minutes} min)")
+                    startActivity(Intent(this, LockActivity::class.java))
+                }
+            }
+            .setNegativeButton("না", null).show()
+    }
+
+    private fun addPresetFlow() {
+        val nameInput = EditText(this).apply { hint = "প্রিসেটের নাম, যেমন: পড়াশোনা" }
+        AlertDialog.Builder(this).setTitle("নতুন প্রিসেট — নাম").setView(nameInput)
+            .setPositiveButton("পরের ধাপ") { _, _ ->
+                val name = nameInput.text.toString().trim()
+                if (name.isBlank()) {
+                    toast("একটা নাম দাও")
+                    return@setPositiveButton
+                }
+                val minInput = EditText(this).apply {
+                    hint = "কত মিনিট? যেমন: 120"
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                }
+                AlertDialog.Builder(this).setTitle("নতুন প্রিসেট — সময়").setView(minInput)
+                    .setPositiveButton("পরের ধাপ") { _, _ ->
+                        val mins = minInput.text.toString().toIntOrNull()
+                        if (mins == null || mins < 1 || mins > 24 * 60) {
+                            toast("1 থেকে 1440 মিনিটের মধ্যে দাও")
+                            return@setPositiveButton
+                        }
+                        pickAppsMulti("এই প্রিসেটে কোন অ্যাপ চলবে?", Store.focusDefaultAllowed(this)) { selected ->
+                            val list = Store.focusPresets(this).filter { it.name != name } +
+                                FocusPreset(name, mins, selected)
+                            Store.saveFocusPresets(this, list)
+                            toast("প্রিসেট তৈরি: $name")
+                            buildUi()
+                        }
+                    }
+                    .setNegativeButton("বাতিল", null).show()
+            }
+            .setNegativeButton("বাতিল", null).show()
+    }
+
+    private fun toggleSilence() {
+        val target = !Store.silenceDuringLock(this)
+        Store.setSilenceDuringLock(this, target)
+        if (target) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            if (!nm.isNotificationPolicyAccessGranted) {
+                toast("আরেকটা ছোট অনুমতি লাগবে: Do Not Disturb অ্যাক্সেস — সেটিংস পেজ খুলছে")
+                startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            } else {
+                toast("নোটিফিকেশন সাইলেন্স চালু")
+            }
+        } else {
+            toast("নোটিফিকেশন সাইলেন্স বন্ধ")
+        }
+        buildUi()
     }
 
     // ---- Tab 2: Schedule ----
@@ -229,6 +415,47 @@ class MainActivity : AppCompatActivity() {
         appLimitList(limitsCard)
         limitsCard.addView(Ui.secondaryButton(this, "অ্যাপে লিমিট বসাও") { addLimitFlow() })
         content.addView(limitsCard)
+
+        // ---- Blocked websites (v1.4, Chrome) ----
+        val siteCard = Ui.card(this)
+        siteCard.addView(Ui.cardTitle(this, "ওয়েবসাইট ব্লক"))
+        siteCard.addView(Ui.label(this, "Chrome-এ এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
+        val sites = Store.blockedSites(this)
+        if (sites.isEmpty()) {
+            siteCard.addView(Ui.secondary(this, "কোনো সাইট ব্লক করা নেই।"))
+        }
+        for (site in sites) {
+            siteCard.addView(Ui.body(this, site))
+            siteCard.addView(Ui.secondaryButton(this, "তুলে দাও: $site (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("remove_site:$site", "ওয়েবসাইট ব্লক তোলা: $site")
+                }
+            })
+        }
+        siteCard.addView(Ui.secondaryButton(this, "সাইট যোগ করো") { addSiteFlow() })
+        content.addView(siteCard)
+    }
+
+    private fun addSiteFlow() {
+        val input = EditText(this).apply {
+            hint = "যেমন: facebook.com বা youtube.com"
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        AlertDialog.Builder(this).setTitle("ওয়েবসাইট ব্লক").setView(input)
+            .setPositiveButton("ব্লক করো") { _, _ ->
+                var host = input.text.toString().trim().lowercase()
+                    .removePrefix("https://").removePrefix("http://").removePrefix("www.")
+                host = host.substringBefore("/").substringBefore("?")
+                if (host.isBlank() || !host.contains(".")) {
+                    toast("ঠিকমতো সাইটের নাম দাও, যেমন facebook.com")
+                } else {
+                    Store.saveBlockedSites(this, Store.blockedSites(this) + host)
+                    Store.logTamper(this, "Website blocked: $host")
+                    toast("ব্লক হয়েছে: $host")
+                    buildUi()
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
     }
 
     // ---- Tab 4: Settings — security + tamper log ----
@@ -250,7 +477,30 @@ class MainActivity : AppCompatActivity() {
                 buildUi()
             })
         }
+        securityCard.addView(Ui.gap(this, 8))
+        securityCard.addView(Ui.secondary(this,
+            "Device Owner (Stage B): " +
+                if (AdminHelper.isDeviceOwner(this)) "চালু আছে"
+                else "এখনো না — যেদিন বলবে, ব্যাকআপ নিয়ে সেটআপ করব"))
+        securityCard.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Stage B-এর জন্য)") {
+            val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("FocusLock ADB", cmd))
+            toast("কপি হয়েছে")
+        })
         content.addView(securityCard)
+
+        // ---- Settings backup / restore (v1.4) ----
+        val backupCard = Ui.card(this)
+        backupCard.addView(Ui.cardTitle(this, "সেটিংস ব্যাকআপ"))
+        backupCard.addView(Ui.secondary(this, "নতুন সংস্করণ বসাতে আনইনস্টল করলে সেটিংস মুছে যায়। ব্যাকআপ ফাইল রাখলে এক ট্যাপে শিডিউল, লিমিট, প্রিসেট, সাইট-ব্লক সব ফিরে আসবে। (PIN ব্যাকআপে থাকে না — আবার সেট করতে হবে।)"))
+        backupCard.addView(Ui.secondaryButton(this, "ব্যাকআপ নাও (ফাইলে সেভ করো)") {
+            exportLauncher.launch("focuslock-backup.json")
+        })
+        backupCard.addView(Ui.secondaryButton(this, "ব্যাকআপ থেকে রিস্টোর করো") {
+            importLauncher.launch(arrayOf("application/json"))
+        })
+        content.addView(backupCard)
 
         val logCard = Ui.card(this)
         logCard.addView(Ui.cardTitle(this, "ট্যাম্পার লগ"))
@@ -268,33 +518,26 @@ class MainActivity : AppCompatActivity() {
     private fun minText(mins: Int) = "%02d:%02d".format(mins / 60, mins % 60)
 
     private fun setupButtons(card: LinearLayout) {
-        card.addView(Ui.secondaryButton(this, "Device Admin চালু করো") {
-            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, AdminHelper.adminComponent(this@MainActivity))
-                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "FocusLock-এর কড়া সুরক্ষার জন্য দরকার।")
-            }
-            startActivity(intent)
-        })
-        card.addView(Ui.secondaryButton(this, "Accessibility চালু করো") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        })
-        card.addView(Ui.secondaryButton(this, "Usage Access দাও") {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        })
-        card.addView(Ui.secondaryButton(this, "Overlay Permission দাও") {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
+        if (!AdminHelper.isAccessibilityOn(this)) {
+            card.addView(Ui.secondaryButton(this, "Accessibility চালু করো") {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            })
+        }
+        if (!AdminHelper.hasUsageAccess(this)) {
+            card.addView(Ui.secondaryButton(this, "Usage Access দাও") {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            })
+        }
+        if (!AdminHelper.hasOverlayPermission(this)) {
+            card.addView(Ui.secondaryButton(this, "Overlay Permission দাও") {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
                 )
-            )
-        })
-        card.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Device Owner-এর জন্য)") {
-            val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("FocusLock ADB", cmd))
-            toast("কপি হয়েছে। PC-তে ADB দিয়ে একবার চালাতে হবে — গাইড README-তে আছে।")
-        })
+            })
+        }
     }
 
     // ---------------- schedules ----------------
@@ -385,7 +628,9 @@ class MainActivity : AppCompatActivity() {
                     Store.focusDefaultAllowed(this)
                 ) { selected ->
                     verifyPin {
-                        val end = System.currentTimeMillis() + minutes * 60_000L
+                        val nowMs = System.currentTimeMillis()
+                        val end = nowMs + minutes * 60_000L
+                        Store.setFocusStartMs(this, nowMs)
                         Store.setFocusEndMs(this, end)
                         Store.setFocusSessionAllowed(this, selected)
                         AdminHelper.applyLockTaskPackages(this, selected)
