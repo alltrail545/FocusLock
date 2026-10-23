@@ -113,8 +113,19 @@ object Blocker {
             return BlockState.Full(scheduleEndMs(s), s.label.ifBlank { "লক টাইম" })
         }
         // 2b) A blocked website detected in the browser (v1.4).
-        if (Store.siteBlockUntilMs > System.currentTimeMillis() && Store.siteBlockHost.isNotBlank()) {
-            return BlockState.SiteBlocked(Store.siteBlockUntilMs, Store.siteBlockHost)
+        // v1.4.1 latch: the 3-second detection lease cannot renew while the
+        // lock screen covers the browser (its URL bar is unreadable then),
+        // so the block ALSO stays while the lock is up for this site and
+        // that same browser is still the last external app. It clears the
+        // moment the user leaves the browser (Home / another app changes
+        // lastForegroundPkg) — the same latch the AppBlocked path uses.
+        val nowMs = System.currentTimeMillis()
+        val siteLatched = LockActivity.isShowing && Store.siteBlockHost.isNotBlank() &&
+            Store.siteBlockPkg.isNotBlank() && Store.lastForegroundPkg == Store.siteBlockPkg
+        if (Store.siteBlockHost.isNotBlank() &&
+            (Store.siteBlockUntilMs > nowMs || siteLatched)
+        ) {
+            return BlockState.SiteBlocked(maxOf(Store.siteBlockUntilMs, nowMs + 1000), Store.siteBlockHost)
         }
         // 3) Per-app daily limit for the app currently in front.
         val fg = Store.lastForegroundPkg
