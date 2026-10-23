@@ -82,18 +82,43 @@ object Blocker {
         return end.timeInMillis
     }
 
-    /** Today's foreground time for a package, from UsageStats. 0 if usage access not granted. */
+    /**
+     * Today's foreground time for a package, from UsageStats.
+     * v1.4.2 stability: the raw platform read is NOT trusted directly.
+     * queryUsageStats(INTERVAL_DAILY) can return several bucket entries per
+     * package, and on XOS the readings fluctuate between calls — the old
+     * firstOrNull pick could dip under the limit on random ticks, which
+     * dropped the app-limit lock for a second at a time (lock flicker).
+     * Now: aggregate read + bucket-sum fallback (take the max of both),
+     * then Store's monotonic per-day floor — within a day, real usage
+     * never decreases, so a low read is a glitch, not a fact.
+     */
     fun usageTodayMs(ctx: Context, pkg: String): Long {
+        val raw = rawUsageTodayMs(ctx, pkg)
+        return Store.usageFloorMs(ctx, pkg, raw)
+    }
+
+    private fun rawUsageTodayMs(ctx: Context, pkg: String): Long {
         return try {
             val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val start = (Calendar.getInstance().apply {
                 set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
                 set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
             }).timeInMillis
-            val stats = usm.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY, start, System.currentTimeMillis()
-            ) ?: return 0L
-            stats.firstOrNull { it.packageName == pkg }?.totalTimeInForeground ?: 0L
+            val now = System.currentTimeMillis()
+            var best = 0L
+            try {
+                val agg = usm.queryAndAggregateUsageStats(start, now)
+                best = maxOf(best, agg[pkg]?.totalTimeInForeground ?: 0L)
+            } catch (_: Exception) { }
+            try {
+                val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, now)
+                if (stats != null) {
+                    best = maxOf(best, stats.filter { it.packageName == pkg }
+                        .sumOf { it.totalTimeInForeground })
+                }
+            } catch (_: Exception) { }
+            best
         } catch (e: Exception) {
             0L
         }
@@ -132,8 +157,16 @@ object Blocker {
         if (fg != null && fg !in alwaysAllowed(ctx)) {
             val limit = Store.appLimits(ctx).firstOrNull { it.pkg == fg }
             if (limit != null) {
+                // v1.4.2 day latch: once this app crossed its limit today,
+                // the block holds for the rest of the day — a fluctuating
+                // usage re-read can never unlock it mid-day.
+                val latch = Store.appBlockLatch(ctx)
+                if (latch != null && latch.first == fg) {
+                    return BlockState.AppBlocked(fg, fg)
+                }
                 val usedMin = usageTodayMs(ctx, fg) / 60000
                 if (usedMin >= limit.limitMinutes) {
+                    Store.latchAppBlock(ctx, fg, limit.limitMinutes)
                     return BlockState.AppBlocked(fg, fg)
                 }
             }
