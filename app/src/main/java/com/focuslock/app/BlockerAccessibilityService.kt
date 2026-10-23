@@ -1,7 +1,6 @@
 package com.focuslock.app
 
 import android.accessibilityservice.AccessibilityService
-import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 
 /**
@@ -43,8 +42,17 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val type = event?.eventType ?: return
         val pkg = event.packageName?.toString() ?: return
+
+        // v1.4 website blocking: watch the browser's URL bar (Chrome).
+        if (pkg == CHROME_PKG &&
+            (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+        ) {
+            checkBlockedSite()
+        }
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         if (pkg == "com.android.systemui") {
             val state = Blocker.currentBlock(this)
@@ -66,7 +74,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             is BlockState.AppBlocked -> state.pkg == pkg
             BlockState.None -> false
         }
-        if (shouldBlock) bringLockForward()
+        if (shouldBlock) Engine.ensureLockShown(this)
     }
 
     private fun collapsePanelsAndLock() {
@@ -77,20 +85,39 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
         // Home collapses the notification shade / quick-settings panel.
         try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Exception) { }
-        bringLockForward()
+        Engine.ensureLockShown(this)
     }
 
-    private fun bringLockForward() {
-        startActivity(
-            Intent(this, LockActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            }
-        )
+    // ---- v1.4: blocked websites (Chrome URL bar, read via window content) ----
+    private fun checkBlockedSite() {
+        val sites = Store.blockedSites(this)
+        if (sites.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastSiteCheckMs < 400) return
+        lastSiteCheckMs = now
+        val root = rootInActiveWindow ?: return
+        val url = try {
+            root.findAccessibilityNodeInfosByViewId("com.android.chrome:id/url_bar")
+                .firstOrNull()?.text?.toString()?.lowercase()
+        } catch (_: Exception) { null } ?: return
+        val hit = sites.firstOrNull { url.contains(it) } ?: return
+        Store.siteBlockHost = hit
+        Store.siteBlockUntilMs = now + 3000
+        if (now - lastSiteActionMs > 3000) {
+            lastSiteActionMs = now
+            Store.logTamper(this, "Blocked website opened in Chrome: $hit")
+            // Navigate away from the page behind the lock screen.
+            try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (_: Exception) { }
+        }
+        Engine.ensureLockShown(this)
     }
 
     override fun onInterrupt() { /* nothing to interrupt; we never speak or read content */ }
 
     companion object {
+        private const val CHROME_PKG = "com.android.chrome"
         private var lastShadeGuardMs = 0L
+        private var lastSiteCheckMs = 0L
+        private var lastSiteActionMs = 0L
     }
 }
