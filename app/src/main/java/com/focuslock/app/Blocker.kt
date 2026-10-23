@@ -30,10 +30,13 @@ object Blocker {
             "com.android.dialer", "com.google.android.dialer",
             "com.android.incallui", "com.samsung.android.dialer",
             "com.google.android.deskclock", "com.android.deskclock",
-            "com.sec.android.app.clockpackage",
-            "com.android.systemui"
+            "com.sec.android.app.clockpackage"
             // NOTE: Settings is deliberately NOT allowed — in Stage A (no Device Owner)
             // an open Settings screen would be a bypass route, so it gets blocked too.
+            // SystemUI is also NOT in this set (v1.1): Tamim asked for the notification
+            // shade / control panel to be blocked during a lock. The accessibility
+            // service collapses the shade the moment SystemUI comes forward in a
+            // Full lock or Focus session, and a top-strip overlay guards the pull.
         )
         return set
     }
