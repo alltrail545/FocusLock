@@ -6,10 +6,15 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 
 /**
  * The always-on enforcement loop (1s tick):
@@ -24,6 +29,46 @@ class BlockingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastSuspendDay = -1
     private var lockTaskFocusEndApplied = 0L
+
+    // ---- notification-shade pull guard (top strip overlay) ----
+    private var guardView: View? = null
+
+    /**
+     * A thin touch-eating strip over the status-bar area, shown only while a
+     * Full lock or Focus session is active. The pull-down gesture for the
+     * notification shade / control panel starts exactly there, so consuming
+     * touches in that strip stops the shade from ever opening (Stage A).
+     * Stage B (Device Owner) disables the status bar itself, which is stronger;
+     * this strip is the no-root, no-reset layer. Needs overlay permission.
+     */
+    private fun updateShadeGuard(show: Boolean) {
+        val wm = getSystemService(WindowManager::class.java) ?: return
+        if (show && guardView == null) {
+            if (!Settings.canDrawOverlays(this)) return
+            try {
+                val statusH = resources.getIdentifier("status_bar_height", "dimen", "android")
+                    .let { if (it > 0) resources.getDimensionPixelSize(it) else 72 }
+                val strip = View(this).apply {
+                    setOnTouchListener { _, _ -> true } // eat every touch in the strip
+                }
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    statusH + (10 * resources.displayMetrics.density).toInt(),
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                ).apply { gravity = Gravity.TOP }
+                wm.addView(strip, params)
+                guardView = strip
+            } catch (e: Exception) {
+                Store.logTamper(this, "shade guard overlay failed: ${e.message}")
+            }
+        } else if (!show && guardView != null) {
+            try { wm.removeView(guardView) } catch (_: Exception) { }
+            guardView = null
+        }
+    }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -46,7 +91,10 @@ class BlockingService : Service() {
             AdminHelper.refreshSuspensions(this)
         }
 
-        when (val state = Blocker.currentBlock(this)) {
+        val state = Blocker.currentBlock(this)
+        // Shade guard follows the hard-lock states only.
+        updateShadeGuard(state is BlockState.Full || state is BlockState.FocusSession)
+        when (state) {
             is BlockState.Full -> {
                 AdminHelper.refreshSuspensions(this)
                 bringLockForward()
@@ -110,6 +158,7 @@ class BlockingService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        updateShadeGuard(false)
         super.onDestroy()
         // Self-restart backstop (Device Owner also prevents force-stop entirely).
         start(this)
