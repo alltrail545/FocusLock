@@ -133,7 +133,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     private val domainLike =
-        Regex("^[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}([/?#:]\S*)?$")
+        Regex("""^[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}([/?#:]\S*)?$""")
 
     private fun scanForUrl(node: AccessibilityNodeInfo, depth: Int): String? {
         if (depth > 14) return null
