@@ -42,8 +42,7 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:showWhenLocked="true"
-            android:taskAffinity=""
-            android:turnScreenOn="true" />
+            android:taskAffinity="" />
 
         <!-- Device Admin / Device Owner receiver -->
         <receiver
@@ -80,6 +79,26 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Screen-time enforcement chosen by the device owner" />
         </service>
+
+        <!-- Home-screen widget: one-tap focus start (v1.4) -->
+        <receiver
+            android:name=".FocusWidgetProvider"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+        <receiver
+            android:name=".FocusWidgetActions"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.focuslock.app.WIDGET_START_FOCUS" />
+            </intent-filter>
+        </receiver>
 
         <!-- Fast foreground-app detection; the real anti-bypass muscle with Device Owner -->
         <service
