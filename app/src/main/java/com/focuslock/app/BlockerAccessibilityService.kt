@@ -9,12 +9,27 @@ import android.view.accessibility.AccessibilityEvent
  * in front of anything blocked. This is the fast path; BlockingService
  * polling is the backstop if accessibility is ever toggled off
  * (Device Owner policies + the tamper log make that visible).
+ *
+ * v1.1: also guards the notification shade / control panel (SystemUI).
+ * During a Full lock or a Focus session, the moment SystemUI comes forward
+ * (shade pulled, control panel opened, power menu), we collapse it with a
+ * Home global action and put the lock screen back in front.
+ * Stage B (Device Owner) additionally disables the status bar outright.
  */
 class BlockerAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+
+        if (pkg == "com.android.systemui") {
+            val state = Blocker.currentBlock(this)
+            if (state is BlockState.Full || state is BlockState.FocusSession) {
+                collapsePanelsAndLock()
+            }
+            return // never record SystemUI as the foreground app
+        }
+
         Store.lastForegroundPkg = pkg
         if (pkg == packageName) return
         if (pkg in Blocker.alwaysAllowed(this)) return
@@ -27,14 +42,31 @@ class BlockerAccessibilityService : AccessibilityService() {
             is BlockState.AppBlocked -> state.pkg == pkg
             BlockState.None -> false
         }
-        if (shouldBlock) {
-            startActivity(
-                Intent(this, LockActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-            )
+        if (shouldBlock) bringLockForward()
+    }
+
+    private fun collapsePanelsAndLock() {
+        val now = System.currentTimeMillis()
+        if (now - lastShadeGuardMs > 10_000) {
+            lastShadeGuardMs = now
+            Store.logTamper(this, "Notification shade / panel opened during lock - collapsed")
         }
+        // Home collapses the notification shade / quick-settings panel.
+        try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Exception) { }
+        bringLockForward()
+    }
+
+    private fun bringLockForward() {
+        startActivity(
+            Intent(this, LockActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        )
     }
 
     override fun onInterrupt() { /* nothing to interrupt; we never speak or read content */ }
+
+    companion object {
+        private var lastShadeGuardMs = 0L
+    }
 }
