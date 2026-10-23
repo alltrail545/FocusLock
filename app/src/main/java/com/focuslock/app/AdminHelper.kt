@@ -95,6 +95,52 @@ object AdminHelper {
         }
     }
 
+    /**
+     * Emergency exit (v1.5, Stage B): remove Device Owner SAFELY, in the
+     * only safe order — release everything the owner holds BEFORE giving
+     * up ownership, otherwise suspended/hidden apps and restrictions
+     * would be stranded forever with nobody able to lift them:
+     *   1. status bar back on, LockTask whitelist emptied
+     *   2. every user restriction we set is cleared
+     *   3. our own uninstall-block lifted
+     *   4. every limited app un-suspended AND un-hidden (loop — an app
+     *      left hidden after owner removal could never be brought back
+     *      from the UI; this is the stranded-app trap)
+     *   5. only then: clearDeviceOwnerApp + removeActiveAdmin
+     * Reached only via the PIN + 24h pending-weakening path in the app.
+     * Each step is isolated so one failure cannot strand the rest.
+     */
+    fun safelyRemoveDeviceOwner(ctx: Context) {
+        val dpm = dpm(ctx)
+        val admin = adminComponent(ctx)
+        if (!isDeviceOwner(ctx)) {
+            if (isAdminActive(ctx)) {
+                try { dpm.removeActiveAdmin(admin) } catch (_: Throwable) { }
+                Store.logTamper(ctx, "Device Admin removed (was not owner)")
+            }
+            return
+        }
+        try { dpm.setStatusBarDisabled(admin, false) } catch (_: Throwable) { }
+        try { dpm.setLockTaskPackages(admin, emptyArray()) } catch (_: Throwable) { }
+        for (r in listOf(
+            android.os.UserManager.DISALLOW_SAFE_BOOT,
+            android.os.UserManager.DISALLOW_FACTORY_RESET,
+            android.os.UserManager.DISALLOW_CONFIG_DATE_TIME,
+            android.os.UserManager.DISALLOW_DEBUGGING_FEATURES,
+            android.os.UserManager.DISALLOW_ADD_USER
+        )) {
+            try { dpm.clearUserRestriction(admin, r) } catch (_: Throwable) { }
+        }
+        try { dpm.setUninstallBlocked(admin, ctx.packageName, false) } catch (_: Throwable) { }
+        for (limit in Store.appLimits(ctx)) {
+            try { dpm.setPackagesSuspended(admin, arrayOf(limit.pkg), false) } catch (_: Throwable) { }
+            try { dpm.setApplicationHidden(admin, limit.pkg, false) } catch (_: Throwable) { }
+        }
+        try { dpm.clearDeviceOwnerApp(ctx.packageName) } catch (_: Throwable) { }
+        try { dpm.removeActiveAdmin(admin) } catch (_: Throwable) { }
+        Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (after 24h delay)")
+    }
+
     /** At midnight rollover, un-suspend everything whose limit has reset. */
     fun refreshSuspensions(ctx: Context) {
         if (!isDeviceOwner(ctx)) return
