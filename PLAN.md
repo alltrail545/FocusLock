@@ -3,10 +3,7 @@
 **কী বানাচ্ছি:** এমন একটা স্ক্রিন-টাইম অ্যাপ যেখানে নির্ধারিত সময়ে তুমি *চাইলেও* ফোন ব্যবহার করতে পারবে না।
 শুধু রিমাইন্ডার না — আসল লক। সিদ্ধান্ত নেওয়া হয়ে গেছে: **একদম কড়া মোড**।
 
-**স্থিতি (23 Oct 2026):** v1-এর পুরো কোড লেখা শেষ, লোকালে আছে (`~/workspace/focuslock/`)।
-GitHub push / APK বিল্ড আপাতত থামিয়ে রাখা হয়েছে — আগে তুমি প্ল্যান দেখবে, তারপর।
-
-> **সর্বশেষ হস্তান্তর-নোট (23 Oct 2026):** উপরের লাইনটি আগের অবস্থা। Tamim প্ল্যান দেখে GitHub push ও APK বিল্ডের অনুমোদন দিয়েছেন, এবং Focus সেশনে শুধু বাছাই-করা অ্যাপ চালানোর whitelist ফিচারও কোডে যোগ হয়েছে। alltrail545/FocusLock রিপোতে Muse GitHub App-এর write access 403 দেওয়ায় পুরো প্রজেক্ট ZIP আকারে অন্য Muse অ্যাকাউন্ট দিয়ে push করার জন্য হস্তান্তর করা হয়েছে। পরের ধাপ: ZIP-এর ভেতরের ফাইলগুলো রিপোর রুটে রেখে push করা এবং GitHub Actions বিল্ড যাচাই করা।
+**স্থিতি (24 Oct 2026):** **v1.5.0 বিল্ড সফল** (Actions run #60, artifact FocusLock-v1.5.0-apk)। Stage A সম্পূর্ণ — Tamim ফোনে যাচাই করে বলেছেন "All okay" (অ্যাপ-লিমিট লকের flicker v1.4.2-তে চিরতরে ঠিক: স্থিতিশীল usage রিডিং + দৈনিক ল্যাচ + genuine-leave exit)। **Stage B শুরু হয়েছে** — Tamim 24 Oct অনুমোদন দিয়েছেন; v1.5.0-তে নিরাপদ Device Owner emergency exit যোগ হয়েছে (PIN + 24h, ordered teardown: restrictions clear → unsuspend/unhide loop → clearDeviceOwnerApp)। পরের ধাপ: Tamim 1.5.0 ইনস্টল করবেন, তারপর reset-ছাড়া পথে (সব account সাময়িক Remove → `adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver` → account ফেরত) ধাপে ধাপে গাইড ধরে Owner বসানো ও যাচাই।
 
 ---
 
