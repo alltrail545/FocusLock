@@ -154,6 +154,7 @@ object Store {
         if (System.currentTimeMillis() < at) return
         when {
             action == "protection_off" -> setProtectionOn(ctx, false)
+            action == "remove_device_owner" -> AdminHelper.safelyRemoveDeviceOwner(ctx)
             action.startsWith("delete_schedule:") -> {
                 val id = action.removePrefix("delete_schedule:").toLongOrNull() ?: return
                 saveSchedules(ctx, schedules(ctx).filter { it.id != id })
