@@ -25,18 +25,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * FocusLock home, rebuilt on Tamim's design system (2026-10-23):
+ * FocusLock home, on Tamim's design system (2026-10-23):
  * near-black green-tinted background, flat bento cards, emerald accent,
  * no gradients, no emoji in any control or label.
+ * v1.2: BOTTOM NAVIGATION BAR with five tabs (Tamim's request):
+ * Home / Focus / Schedule / Limits / Settings.
  */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var root: LinearLayout
-    private lateinit var setupCard: LinearLayout
-    private lateinit var focusCard: LinearLayout
-    private lateinit var scheduleCard: LinearLayout
-    private lateinit var limitsCard: LinearLayout
-    private lateinit var securityCard: LinearLayout
+    private var currentTab = 0 // 0 Home, 1 Focus, 2 Schedule, 3 Limits, 4 Settings
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,35 +50,144 @@ class MainActivity : AppCompatActivity() {
     // ---------------- UI construction ----------------
 
     private fun buildUi() {
-        root = LinearLayout(this).apply {
+        val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Ui.BG)
-            setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16),
+        }
+
+        // Header (fixed above the scrolling content)
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 14),
+                Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 10))
+        }
+        header.addView(Ui.appTitle(this, "FocusLock"))
+        header.addView(Ui.label(this, "একদম কড়া স্ক্রিন-টাইম লক").apply {
+            setPadding(0, Ui.dp(this@MainActivity, 2), 0, 0)
+        })
+        shell.addView(header)
+
+        // Scrolling tab content
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 4),
                 Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16))
         }
-        val scroll = ScrollView(this).apply { setBackgroundColor(Ui.BG) }
-        scroll.addView(root)
-        setContentView(scroll)
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Ui.BG)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+        }
+        scroll.addView(content)
+        shell.addView(scroll)
 
-        root.addView(Ui.appTitle(this, "FocusLock"))
-        root.addView(Ui.secondary(this, "একদম কড়া স্ক্রিন-টাইম লক — নির্ধারিত সময়ে চাইলেও ফোন খোলা যাবে না।").apply {
-            setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 16))
+        when (currentTab) {
+            0 -> tabHome(content)
+            1 -> tabFocus(content)
+            2 -> tabSchedule(content)
+            3 -> tabLimits(content)
+            else -> tabSettings(content)
+        }
+
+        // Hairline + bottom navigation bar
+        shell.addView(android.view.View(this).apply {
+            setBackgroundColor(Ui.STROKE)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this@MainActivity, 1))
         })
+        shell.addView(buildNavBar())
+        setContentView(shell)
+    }
 
-        // ---- Setup status card ----
-        setupCard = Ui.card(this)
-        setupCard.addView(Ui.cardTitle(this, "সেটআপ অবস্থা"))
-        setupCard.addView(Ui.statusRow(this, "Device Owner (সবচেয়ে কড়া)", AdminHelper.isDeviceOwner(this)))
-        setupCard.addView(Ui.statusRow(this, "Device Admin", AdminHelper.isAdminActive(this)))
-        setupCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
-        setupCard.addView(Ui.statusRow(this, "Usage Access (লিমিটের হিসাব)", AdminHelper.hasUsageAccess(this)))
-        setupCard.addView(Ui.statusRow(this, "Overlay Permission", AdminHelper.hasOverlayPermission(this)))
-        setupCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
-        setupButtons(setupCard)
-        root.addView(setupCard)
+    private fun buildNavBar(): LinearLayout {
+        val labels = listOf("হোম", "ফোকাস", "শিডিউল", "লিমিট", "সেটিংস")
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Ui.CARD)
+            setPadding(Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 10),
+                Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 12))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        for (i in labels.indices) {
+            val active = i == currentTab
+            val item = TextView(this).apply {
+                text = labels[i]
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 8),
+                    Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 8))
+                if (active) {
+                    setTextColor(Ui.BRIGHT)
+                    typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                        setColor(Ui.RAISED)
+                        cornerRadius = Ui.dp(this@MainActivity, 999).toFloat()
+                        setStroke(Ui.dp(this@MainActivity, 1), Ui.ACCENT)
+                    }
+                } else {
+                    setTextColor(Ui.MUTED)
+                }
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = Ui.dp(this@MainActivity, 2)
+                    marginEnd = Ui.dp(this@MainActivity, 2)
+                }
+                setOnClickListener {
+                    if (currentTab != i) {
+                        currentTab = i
+                        buildUi()
+                    }
+                }
+            }
+            bar.addView(item)
+        }
+        return bar
+    }
 
-        // ---- Focus card (the main feature: lock on demand, any time) ----
-        focusCard = Ui.card(this)
+    // ---- Tab 0: Home — live status + setup actions ----
+    private fun tabHome(content: LinearLayout) {
+        val statusCard = Ui.card(this)
+        statusCard.addView(Ui.cardTitle(this, "সেটআপ অবস্থা"))
+        statusCard.addView(Ui.statusRow(this, "Device Owner (সবচেয়ে কড়া)", AdminHelper.isDeviceOwner(this)))
+        statusCard.addView(Ui.statusRow(this, "Device Admin", AdminHelper.isAdminActive(this)))
+        statusCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
+        statusCard.addView(Ui.statusRow(this, "Usage Access (লিমিটের হিসাব)", AdminHelper.hasUsageAccess(this)))
+        statusCard.addView(Ui.statusRow(this, "Overlay Permission", AdminHelper.hasOverlayPermission(this)))
+        statusCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
+        setupButtons(statusCard)
+        content.addView(statusCard)
+
+        val nowCard = Ui.card(this)
+        nowCard.addView(Ui.cardTitle(this, "এখনকার অবস্থা"))
+        val focusEnd = Store.focusEndMs(this)
+        if (focusEnd > System.currentTimeMillis()) {
+            nowCard.addView(Ui.body(this, "ফোকাস চলছে — শেষ হবে ${timeText(focusEnd)}").apply {
+                setTextColor(Ui.BRIGHT)
+            })
+        } else {
+            val active = Blocker.activeSchedule(this)
+            if (active != null) {
+                nowCard.addView(Ui.body(this, "শিডিউল লক চলছে — ${active.label}").apply {
+                    setTextColor(Ui.BRIGHT)
+                })
+            } else {
+                nowCard.addView(Ui.secondary(this, "এখন কোনো লক চলছে না। ফোকাস ট্যাব থেকে যেকোনো সময় লক শুরু করা যাবে।"))
+            }
+        }
+        val pending = Store.pendingAction(this)
+        if (pending != null) {
+            nowCard.addView(Ui.secondary(this, "Pending পরিবর্তন আছে — সেটিংস ট্যাবে দেখো।").apply {
+                setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0)
+            })
+        }
+        content.addView(nowCard)
+    }
+
+    // ---- Tab 1: Focus — the main feature ----
+    private fun tabFocus(content: LinearLayout) {
+        val focusCard = Ui.card(this)
         focusCard.addView(Ui.cardTitle(this, "ফোকাস সেশন"))
         focusCard.addView(Ui.label(this, "শুরু করলে সময় শেষ হওয়ার আগে বাতিল করা যাবে না"))
         focusCard.addView(Ui.primaryButton(this, "25 মিনিট ফোকাস") { startFocus(25) })
@@ -100,26 +206,32 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0)
             })
         }
-        root.addView(focusCard)
+        content.addView(focusCard)
+    }
 
-        // ---- Schedule card (optional) ----
-        scheduleCard = Ui.card(this)
+    // ---- Tab 2: Schedule ----
+    private fun tabSchedule(content: LinearLayout) {
+        val scheduleCard = Ui.card(this)
         scheduleCard.addView(Ui.cardTitle(this, "লক শিডিউল"))
         scheduleCard.addView(Ui.label(this, "ঐচ্ছিক — প্রতিদিন একই সময়ে অটো লক"))
         scheduleList(scheduleCard)
         scheduleCard.addView(Ui.secondaryButton(this, "নতুন শিডিউল যোগ করো") { addScheduleFlow() })
-        root.addView(scheduleCard)
+        content.addView(scheduleCard)
+    }
 
-        // ---- App limits card ----
-        limitsCard = Ui.card(this)
+    // ---- Tab 3: App limits ----
+    private fun tabLimits(content: LinearLayout) {
+        val limitsCard = Ui.card(this)
         limitsCard.addView(Ui.cardTitle(this, "অ্যাপ লিমিট"))
         limitsCard.addView(Ui.label(this, "প্রতিদিনের সীমা — পার হলেই সেদিনের জন্য বন্ধ"))
         appLimitList(limitsCard)
         limitsCard.addView(Ui.secondaryButton(this, "অ্যাপে লিমিট বসাও") { addLimitFlow() })
-        root.addView(limitsCard)
+        content.addView(limitsCard)
+    }
 
-        // ---- Security card ----
-        securityCard = Ui.card(this)
+    // ---- Tab 4: Settings — security + tamper log ----
+    private fun tabSettings(content: LinearLayout) {
+        val securityCard = Ui.card(this)
         securityCard.addView(Ui.cardTitle(this, "সুরক্ষা"))
         pendingInfo(securityCard)
         securityCard.addView(Ui.secondaryButton(this, "PIN সেট / বদলাও") { setPinFlow() })
@@ -136,9 +248,8 @@ class MainActivity : AppCompatActivity() {
                 buildUi()
             })
         }
-        root.addView(securityCard)
+        content.addView(securityCard)
 
-        // ---- Tamper log card ----
         val logCard = Ui.card(this)
         logCard.addView(Ui.cardTitle(this, "ট্যাম্পার লগ"))
         val log = Store.tamperLog(this)
@@ -146,7 +257,7 @@ class MainActivity : AppCompatActivity() {
             if (log.isBlank()) "এখনো কোনো চেষ্টা হয়নি।"
             else log.lines().takeLast(20).joinToString("\n")
         ))
-        root.addView(logCard)
+        content.addView(logCard)
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
