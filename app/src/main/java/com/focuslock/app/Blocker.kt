@@ -16,6 +16,8 @@ sealed class BlockState {
     data class FocusSession(val untilMs: Long, val allowed: Set<String>) : BlockState()
     /** One app over its daily limit. */
     data class AppBlocked(val pkg: String, val label: String) : BlockState()
+    /** A blocked website is open in the browser (v1.4). Transient, renewed while detected. */
+    data class SiteBlocked(val untilMs: Long, val host: String) : BlockState()
 }
 
 /** Pure decision engine: given the clock + stored rules + today's usage, should we block? */
@@ -109,6 +111,10 @@ object Blocker {
         // 2) Scheduled full lock.
         activeSchedule(ctx)?.let { s ->
             return BlockState.Full(scheduleEndMs(s), s.label.ifBlank { "লক টাইম" })
+        }
+        // 2b) A blocked website detected in the browser (v1.4).
+        if (Store.siteBlockUntilMs > System.currentTimeMillis() && Store.siteBlockHost.isNotBlank()) {
+            return BlockState.SiteBlocked(Store.siteBlockUntilMs, Store.siteBlockHost)
         }
         // 3) Per-app daily limit for the app currently in front.
         val fg = Store.lastForegroundPkg
