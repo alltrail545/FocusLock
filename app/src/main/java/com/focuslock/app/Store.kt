@@ -315,4 +315,47 @@ object Store {
 
     // ---- last foreground package (written by the accessibility service) ----
     @Volatile var lastForegroundPkg: String? = null
+
+    // ---- v1.4.2: stable usage floor + app-block day latch ----
+    // XOS usage-stats reads fluctuate between calls (multi-bucket replies);
+    // a single low read used to drop an app-limit lock for a second and the
+    // lock screen flickered off and on. Within one day real usage can only
+    // grow, so we persist the highest value seen today and never go below it.
+    fun usageFloorMs(ctx: Context, pkg: String, rawMs: Long): Long {
+        val p = prefs(ctx)
+        val today = dayKey()
+        if (p.getString("usage_day", "") != today) {
+            // New day: forget yesterday's floors and any latched block.
+            val ed = p.edit().putString("usage_day", today)
+                .remove("appblock_pkg").remove("appblock_day").remove("appblock_limit")
+            for (key in p.all.keys.filter { it.startsWith("usage_max_") }) ed.remove(key)
+            ed.apply()
+        }
+        val key = "usage_max_$pkg"
+        val stored = p.getLong(key, 0L)
+        val best = maxOf(stored, rawMs)
+        if (best > stored) p.edit().putLong(key, best).apply()
+        return best
+    }
+
+    /** Once an app crosses its daily limit, its block is latched for the rest of the day. */
+    fun latchAppBlock(ctx: Context, pkg: String, limitMinutes: Int) {
+        prefs(ctx).edit()
+            .putString("appblock_pkg", pkg)
+            .putString("appblock_day", dayKey())
+            .putInt("appblock_limit", limitMinutes)
+            .apply()
+    }
+
+    /** The latched (pkg, limit) — valid only today, and only while that app's limit is unchanged. */
+    fun appBlockLatch(ctx: Context): Pair<String, Int>? {
+        val p = prefs(ctx)
+        if (p.getString("appblock_day", "") != dayKey()) return null
+        val pkg = p.getString("appblock_pkg", null) ?: return null
+        val limit = p.getInt("appblock_limit", -1)
+        if (limit < 0) return null
+        val current = appLimits(ctx).firstOrNull { it.pkg == pkg } ?: return null
+        if (current.limitMinutes != limit) return null
+        return pkg to limit
+    }
 }
