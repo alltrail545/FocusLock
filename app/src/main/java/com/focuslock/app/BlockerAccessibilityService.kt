@@ -56,7 +56,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
                 type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
         ) {
-            checkBlockedSite()
+            checkBlockedSite(pkg)
         }
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
@@ -68,8 +68,15 @@ class BlockerAccessibilityService : AccessibilityService() {
             return // never record SystemUI as the foreground app
         }
 
-        Store.lastForegroundPkg = pkg
+        // v1.4.1 flicker fix: NEVER record our own package as "the foreground
+        // app". The moment the lock screen opened, this line used to overwrite
+        // the blocked app with com.focuslock.app; Blocker then saw an allowed
+        // app in front, returned None, and the lock closed itself — blocked
+        // app back in front, lock again, forever (Tamim's video). From now on
+        // lastForegroundPkg is the last EXTERNAL app, so a block stays latched
+        // until the user genuinely leaves for another app / the launcher.
         if (pkg == packageName) return
+        Store.lastForegroundPkg = pkg
         if (pkg in Blocker.alwaysAllowed(this)) return
 
         val state = Blocker.currentBlock(this)
@@ -101,7 +108,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     // URL extraction is layered: (1) known URL-bar view ids per browser,
     // (2) a generic tree scan for a node whose view id mentions url /
     // omnibox / location, or an address-field holding a domain-like text.
-    private fun checkBlockedSite() {
+    private fun checkBlockedSite(browserPkg: String) {
         val sites = Store.blockedSites(this)
         if (sites.isEmpty()) return
         val now = System.currentTimeMillis()
@@ -111,6 +118,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         val url = extractUrl(root) ?: return
         val hit = sites.firstOrNull { url.contains(it) } ?: return
         Store.siteBlockHost = hit
+        Store.siteBlockPkg = browserPkg
         Store.siteBlockUntilMs = now + 3000
         if (now - lastSiteActionMs > 3000) {
             lastSiteActionMs = now
