@@ -9,13 +9,13 @@ class AdminReceiver : DeviceAdminReceiver() {
         super.onEnabled(context, intent)
         Store.logTamper(context, "Device Admin enabled")
         AdminHelper.applyStrictPolicies(context)
-        BlockingService.start(context)
+        Engine.tick(context)
     }
 
     override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
         super.onProfileProvisioningComplete(context, intent)
         AdminHelper.applyStrictPolicies(context)
-        BlockingService.start(context)
+        Engine.tick(context)
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
