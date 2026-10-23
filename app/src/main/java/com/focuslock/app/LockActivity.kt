@@ -39,7 +39,9 @@ class LockActivity : Activity() {
                 }
                 is BlockState.FocusSession -> {
                     val fg = Store.lastForegroundPkg
-                    if (fg != null && fg != packageName &&
+                    val interactive = getSystemService(android.os.PowerManager::class.java)
+                        ?.isInteractive ?: true
+                    if (interactive && fg != null && fg != packageName &&
                         Blocker.isAllowedInFocus(this@LockActivity, fg, state.allowed)
                     ) {
                         // A picked study app is in front — step aside, keep watching.
@@ -55,6 +57,11 @@ class LockActivity : Activity() {
                         handler.postDelayed(this, 1000)
                     }
                 }
+                is BlockState.SiteBlocked -> {
+                    reasonView.text = "এই ওয়েবসাইটটা ব্লক করা: ${state.host}"
+                    countdown.text = "অন্য পেজে যাও — লক নিজে উঠে যাবে"
+                    handler.postDelayed(this, 500)
+                }
                 is BlockState.AppBlocked -> {
                     reasonView.text = "এই অ্যাপের আজকের সময় শেষ"
                     countdown.text = "কাল আবার ব্যবহার করা যাবে"
@@ -68,14 +75,13 @@ class LockActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-        )
+        // v1.4 stability: ONLY show-when-locked. No turn-screen-on (that is
+        // what lit the screen back up and made the lock look like it was
+        // toggling), no keep-screen-on, no keyguard dismiss — the activity
+        // simply waits over the keyguard, already in place at unlock.
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         setShowWhenLocked(true)
-        setTurnScreenOn(true)
+        setTurnScreenOn(false)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -144,6 +150,16 @@ class LockActivity : Activity() {
         handler.post(tick)
     }
 
+    override fun onResume() {
+        super.onResume()
+        isShowing = true
+    }
+
+    override fun onPause() {
+        isShowing = false
+        super.onPause()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) {
@@ -197,7 +213,13 @@ class LockActivity : Activity() {
     }
 
     override fun onDestroy() {
+        isShowing = false
         handler.removeCallbacks(tick)
         super.onDestroy()
+    }
+
+    companion object {
+        /** True while the lock screen is the resumed (visible) activity. */
+        @Volatile var isShowing = false
     }
 }
