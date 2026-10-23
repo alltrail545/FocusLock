@@ -38,7 +38,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AdminHelper.applyStrictPolicies(this)
-        BlockingService.start(this)
+        // v1.3 silent engine: no unconditional service start — Engine only
+        // runs the foreground service while a lock/focus is actually active.
+        Engine.tick(this)
         buildUi()
     }
 
