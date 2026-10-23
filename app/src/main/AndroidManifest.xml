@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Do Not Disturb control during locks (access granted by the user in Settings) -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <!-- Detect what app is in front / list installed apps for limits -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -112,6 +114,21 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_config" />
+        </service>
+
+        <!-- Declared so FocusLock APPEARS in Settings → Do Not Disturb access.
+             Android builds that list only from apps declaring a notification
+             listener service; without this, FocusLock was invisible there and
+             the DND grant was impossible (Tamim's v1.4.0 report). The service
+             itself never reads notifications. -->
+        <service
+            android:name=".DndAccessService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
 
     </application>
