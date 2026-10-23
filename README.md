@@ -91,6 +91,8 @@ adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver
 
 সফল হলে দেখাবে: `Success: Device owner set to package com.focuslock.app`
 
+📖 **পুরো বিস্তারিত গাইড: [STAGE-B-SETUP.md](STAGE-B-SETUP.md)** — প্রস্তুতির checklist, ধাপে ধাপে সেটআপ, এরর হলে সমাধান, Plan B (reset পথ), যাচাইয়ের তালিকা আর Emergency Exit।
+
 **জরুরি বের-হওয়ার পথ (v1.5.0 থেকে):** Settings → সুরক্ষা কার্ডে "Device Owner সরানোর আবেদন" — PIN + 24 ঘণ্টা পর কার্যকর হয়, এবং সরানোর সময় আগে সব restriction ওঠে, suspend/hide করা সব অ্যাপ ফিরে আসে, তারপর Owner যায় — কোনো অ্যাপ আটকে থাকে না।
 
 ### সৎ সীমাবদ্ধতা
