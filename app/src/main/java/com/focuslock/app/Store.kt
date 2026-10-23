@@ -213,6 +213,8 @@ object Store {
     /** Transient: a blocked site is being shown the lock screen until this time. */
     @Volatile var siteBlockUntilMs: Long = 0L
     @Volatile var siteBlockHost: String = ""
+    /** Which browser the blocked site was detected in (v1.4.1 latch). */
+    @Volatile var siteBlockPkg: String = ""
 
     // ---- focus history for the report: "yyyy-MM-dd=minutes;..." ----
     private fun dayKey(offsetDays: Int = 0): String {
