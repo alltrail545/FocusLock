@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FocusLock</string>
+    <string name="admin_description">FocusLock-কে Device Owner হিসেবে ফোন লক, আনইনস্টল আটকানো ও সেটিংস সুরক্ষার অনুমতি দেয়।</string>
+    <string name="accessibility_label">FocusLock Blocker</string>
+    <string name="accessibility_description">কোন অ্যাপ সামনে আছে তা দেখে ব্লক-করা অ্যাপ ও লক-টাইমে পুরো ফোন আটকে দেয়।</string>
+</resources>
