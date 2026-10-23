@@ -192,7 +192,7 @@ class MainActivity : AppCompatActivity() {
         permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
         permCard.addView(Ui.statusRow(this, "Usage Access (লিমিট ও হিসাব)", AdminHelper.hasUsageAccess(this)))
         permCard.addView(Ui.statusRow(this, "Overlay (শেড গার্ড)", AdminHelper.hasOverlayPermission(this)))
-        setupButtons(permCard)
+        permCard.addView(Ui.secondary(this, "সব পারমিশন সেটিংস একসাথে — সেটিংস ট্যাবে আলাদা কার্ডে।"))
         content.addView(permCard)
 
         val nowCard = Ui.card(this)
@@ -419,7 +419,7 @@ class MainActivity : AppCompatActivity() {
         // ---- Blocked websites (v1.4, Chrome) ----
         val siteCard = Ui.card(this)
         siteCard.addView(Ui.cardTitle(this, "ওয়েবসাইট ব্লক"))
-        siteCard.addView(Ui.label(this, "Chrome-এ এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
+        siteCard.addView(Ui.label(this, "যেকোনো ব্রাউজারে এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
         val sites = Store.blockedSites(this)
         if (sites.isEmpty()) {
             siteCard.addView(Ui.secondary(this, "কোনো সাইট ব্লক করা নেই।"))
@@ -458,8 +458,55 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("বাতিল", null).show()
     }
 
-    // ---- Tab 4: Settings — security + tamper log ----
+    // ---- Tab 4: Settings — permissions, security, backup, log ----
     private fun tabSettings(content: LinearLayout) {
+        // ALL permission settings in ONE dedicated card (Tamim's request).
+        val permCard = Ui.card(this)
+        permCard.addView(Ui.cardTitle(this, "পারমিশন সেটিংস"))
+        permCard.addView(Ui.label(this, "সব পারমিশন এক জায়গায়"))
+        permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
+        if (!AdminHelper.isAccessibilityOn(this)) {
+            permCard.addView(Ui.secondaryButton(this, "Accessibility চালু করো") {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            })
+        }
+        permCard.addView(Ui.statusRow(this, "Usage Access (লিমিট ও হিসাব)", AdminHelper.hasUsageAccess(this)))
+        if (!AdminHelper.hasUsageAccess(this)) {
+            permCard.addView(Ui.secondaryButton(this, "Usage Access দাও") {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            })
+        }
+        permCard.addView(Ui.statusRow(this, "Overlay (শেড গার্ড)", AdminHelper.hasOverlayPermission(this)))
+        if (!AdminHelper.hasOverlayPermission(this)) {
+            permCard.addView(Ui.secondaryButton(this, "Overlay Permission দাও") {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            })
+        }
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        permCard.addView(Ui.statusRow(this, "Do Not Disturb অ্যাক্সেস (নোটিফিকেশন সাইলেন্স)", nm.isNotificationPolicyAccessGranted))
+        if (!nm.isNotificationPolicyAccessGranted) {
+            permCard.addView(Ui.secondaryButton(this, "DND অ্যাক্সেস দাও") {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            })
+        }
+        permCard.addView(Ui.statusRow(this, "Device Admin", AdminHelper.isAdminActive(this)))
+        if (!AdminHelper.isAdminActive(this)) {
+            permCard.addView(Ui.secondaryButton(this, "Device Admin চালু করো") {
+                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, AdminHelper.adminComponent(this@MainActivity))
+                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "FocusLock-এর কড়া সুরক্ষার জন্য দরকার।")
+                }
+                startActivity(intent)
+            })
+        }
+        permCard.addView(Ui.statusRow(this, "Device Owner (Stage B)", AdminHelper.isDeviceOwner(this)))
+        content.addView(permCard)
+
         val securityCard = Ui.card(this)
         securityCard.addView(Ui.cardTitle(this, "সুরক্ষা"))
         pendingInfo(securityCard)
@@ -516,29 +563,6 @@ class MainActivity : AppCompatActivity() {
     private fun timeText(ms: Long) =
         SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(ms))
     private fun minText(mins: Int) = "%02d:%02d".format(mins / 60, mins % 60)
-
-    private fun setupButtons(card: LinearLayout) {
-        if (!AdminHelper.isAccessibilityOn(this)) {
-            card.addView(Ui.secondaryButton(this, "Accessibility চালু করো") {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            })
-        }
-        if (!AdminHelper.hasUsageAccess(this)) {
-            card.addView(Ui.secondaryButton(this, "Usage Access দাও") {
-                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-            })
-        }
-        if (!AdminHelper.hasOverlayPermission(this)) {
-            card.addView(Ui.secondaryButton(this, "Overlay Permission দাও") {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            })
-        }
-    }
 
     // ---------------- schedules ----------------
 
