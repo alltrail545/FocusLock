@@ -28,6 +28,43 @@ class LockActivity : Activity() {
     private lateinit var reasonView: TextView
     private var lockTaskStarted = false
 
+    // v1.4.2 genuine-leave gate: Android sets this via onUserLeaveHint when
+    // the user deliberately leaves (Home / Recents). Stray window events
+    // alone can no longer pose as "the user left" and drop the lock.
+    @Volatile private var userLeaveHint = false
+    /** Which package this lock instance is holding (app-limit / site blocks). */
+    private var lockedPkg: String? = null
+    private var homePkgCache: String? = null
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        userLeaveHint = true
+    }
+
+    private fun homePackage(): String? {
+        if (homePkgCache != null) return homePkgCache
+        homePkgCache = try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
+        } catch (_: Exception) { null }
+        return homePkgCache
+    }
+
+    /**
+     * Has the user GENUINELY left the blocked app? A foreground change to a
+     * real app (dialer, clock, another app opened on purpose) counts at once.
+     * A change to the LAUNCHER counts only with a user-leave hint — XOS fires
+     * extra window events around activity launches, and in v1.4.1 such noise
+     * could still kill the lock for a second (flicker).
+     */
+    private fun userGenuinelyLeft(): Boolean {
+        val lp = lockedPkg ?: return true
+        val fg = Store.lastForegroundPkg ?: return false
+        if (fg == lp || fg == packageName) return false
+        if (fg == homePackage() && !userLeaveHint) return false
+        return true
+    }
+
     private val tick = object : Runnable {
         override fun run() {
             val state = Blocker.currentBlock(this@LockActivity)
@@ -58,21 +95,29 @@ class LockActivity : Activity() {
                     }
                 }
                 is BlockState.SiteBlocked -> {
+                    lockedPkg = Store.siteBlockPkg
                     reasonView.text = "এই ওয়েবসাইটটা ব্লক করা: ${state.host}"
                     countdown.text = "Home চেপে বেরিয়ে যাও — এই সাইটটা খোলা যাবে না"
                     handler.postDelayed(this, 500)
-                    // v1.4.1 latch exit: only when the user has genuinely left
-                    // the browser behind the lock (launcher / another app).
-                    val fgNow = Store.lastForegroundPkg
-                    if (fgNow != null && fgNow != Store.siteBlockPkg) finishLock()
+                    // v1.4.2: exit only on a genuine leave (see userGenuinelyLeft).
+                    if (userGenuinelyLeft()) finishLock()
                 }
                 is BlockState.AppBlocked -> {
+                    lockedPkg = state.pkg
                     reasonView.text = "এই অ্যাপের আজকের সময় শেষ"
                     countdown.text = "কাল আবার ব্যবহার করা যাবে"
                     handler.postDelayed(this, 2000)
-                    if (Store.lastForegroundPkg != state.pkg) finishLock()
+                    if (userGenuinelyLeft()) finishLock()
                 }
-                BlockState.None -> finishLock()
+                BlockState.None -> {
+                    // v1.4.2: for app/site locks a lone None reading is NOT
+                    // proof the block ended (usage stats fluctuate; stray
+                    // window events happen) — only a genuine leave ends it.
+                    // Hard locks (lockedPkg == null: Full/Focus) still finish
+                    // the moment their time is up.
+                    if (lockedPkg == null || userGenuinelyLeft()) finishLock()
+                    else handler.postDelayed(this, 1000)
+                }
             }
         }
     }
