@@ -79,6 +79,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // v1.5 belt-and-braces: if Device Owner was removed (emergency exit)
+        // while a LockTask pin was somehow still held, release it here so
+        // the phone can never be stranded in kiosk mode without an owner.
+        if (!AdminHelper.isDeviceOwner(this)) {
+            try {
+                val am = getSystemService(android.app.ActivityManager::class.java)
+                if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
+                    stopLockTask()
+                }
+            } catch (_: Exception) { }
+        }
         buildUi() // refresh status + lists
     }
 
@@ -529,6 +540,15 @@ class MainActivity : AppCompatActivity() {
             "Device Owner (Stage B): " +
                 if (AdminHelper.isDeviceOwner(this)) "চালু আছে"
                 else "এখনো না — যেদিন বলবে, ব্যাকআপ নিয়ে সেটআপ করব"))
+        if (AdminHelper.isDeviceOwner(this)) {
+            securityCard.addView(Ui.secondaryButton(this, "Device Owner সরানোর আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("remove_device_owner", "Device Owner removal")
+                }
+            })
+            securityCard.addView(Ui.secondary(this,
+                "জরুরি বের-হওয়ার পথ: Owner সরালে আগে সব restriction উঠবে, suspend/hide করা অ্যাপ ফিরবে, তারপর Owner যাবে — কোনো অ্যাপ আটকে থাকবে না।"))
+        }
         securityCard.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Stage B-এর জন্য)") {
             val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
