@@ -59,8 +59,12 @@ class LockActivity : Activity() {
                 }
                 is BlockState.SiteBlocked -> {
                     reasonView.text = "এই ওয়েবসাইটটা ব্লক করা: ${state.host}"
-                    countdown.text = "অন্য পেজে যাও — লক নিজে উঠে যাবে"
+                    countdown.text = "Home চেপে বেরিয়ে যাও — এই সাইটটা খোলা যাবে না"
                     handler.postDelayed(this, 500)
+                    // v1.4.1 latch exit: only when the user has genuinely left
+                    // the browser behind the lock (launcher / another app).
+                    val fgNow = Store.lastForegroundPkg
+                    if (fgNow != null && fgNow != Store.siteBlockPkg) finishLock()
                 }
                 is BlockState.AppBlocked -> {
                     reasonView.text = "এই অ্যাপের আজকের সময় শেষ"
