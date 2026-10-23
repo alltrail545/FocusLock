@@ -24,9 +24,19 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+/**
+ * FocusLock home, rebuilt on Tamim's design system (2026-10-23):
+ * near-black green-tinted background, flat bento cards, emerald accent,
+ * no gradients, no emoji in any control or label.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var root: LinearLayout
+    private lateinit var setupCard: LinearLayout
+    private lateinit var focusCard: LinearLayout
+    private lateinit var scheduleCard: LinearLayout
+    private lateinit var limitsCard: LinearLayout
+    private lateinit var securityCard: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,117 +55,120 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
+            setBackgroundColor(Ui.BG)
+            setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16),
+                Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16))
         }
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply { setBackgroundColor(Ui.BG) }
         scroll.addView(root)
         setContentView(scroll)
 
-        root.addView(title("🔒 FocusLock"))
-        root.addView(sub("একদম কড়া স্ক্রিন-টাইম লক — নির্ধারিত সময়ে চাইলেও ফোন খোলা যাবে না।"))
-        root.addView(section("সেটআপ অবস্থা"))
-        root.addView(statusLines())
-        setupButtons()
+        root.addView(Ui.appTitle(this, "FocusLock"))
+        root.addView(Ui.secondary(this, "একদম কড়া স্ক্রিন-টাইম লক — নির্ধারিত সময়ে চাইলেও ফোন খোলা যাবে না।").apply {
+            setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 16))
+        })
 
-        // Tamim's main use (2026-10-23): no fixed daily schedule — he locks the
-        // phone ON DEMAND, any time of day or night, whenever he needs to.
-        // So Focus is the hero section, schedules are secondary.
-        root.addView(section("⏱ ফোকাস সেশন (শুরু করলে বাতিল হবে না)"))
-        root.addView(button("25 মিনিট ফোকাস") { startFocus(25) })
-        root.addView(button("1 ঘণ্টা ফোকাস") { startFocus(60) })
-        root.addView(button("2 ঘণ্টা ফোকাস") { startFocus(120) })
-        root.addView(button("🕐 নিজের মতো সময় ফোকাস") { customFocusFlow() })
-        root.addView(button("📚 স্টাডি অ্যাপ বাছাই (ফোকাসে শুধু এগুলোই চলবে)") { pickDefaultAllowedFlow() })
+        // ---- Setup status card ----
+        setupCard = Ui.card(this)
+        setupCard.addView(Ui.cardTitle(this, "সেটআপ অবস্থা"))
+        setupCard.addView(Ui.statusRow(this, "Device Owner (সবচেয়ে কড়া)", AdminHelper.isDeviceOwner(this)))
+        setupCard.addView(Ui.statusRow(this, "Device Admin", AdminHelper.isAdminActive(this)))
+        setupCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
+        setupCard.addView(Ui.statusRow(this, "Usage Access (লিমিটের হিসাব)", AdminHelper.hasUsageAccess(this)))
+        setupCard.addView(Ui.statusRow(this, "Overlay Permission", AdminHelper.hasOverlayPermission(this)))
+        setupCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
+        setupButtons(setupCard)
+        root.addView(setupCard)
+
+        // ---- Focus card (the main feature: lock on demand, any time) ----
+        focusCard = Ui.card(this)
+        focusCard.addView(Ui.cardTitle(this, "ফোকাস সেশন"))
+        focusCard.addView(Ui.label(this, "শুরু করলে সময় শেষ হওয়ার আগে বাতিল করা যাবে না"))
+        focusCard.addView(Ui.primaryButton(this, "25 মিনিট ফোকাস") { startFocus(25) })
+        focusCard.addView(Ui.secondaryButton(this, "1 ঘণ্টা ফোকাস") { startFocus(60) })
+        focusCard.addView(Ui.secondaryButton(this, "2 ঘণ্টা ফোকাস") { startFocus(120) })
+        focusCard.addView(Ui.secondaryButton(this, "নিজের মতো সময় ফোকাস") { customFocusFlow() })
+        focusCard.addView(Ui.secondaryButton(this, "স্টাডি অ্যাপ বাছাই (ফোকাসে শুধু এগুলোই চলবে)") { pickDefaultAllowedFlow() })
         val preset = Store.focusDefaultAllowed(this)
-        root.addView(sub(
+        focusCard.addView(Ui.secondary(this,
             if (preset.isEmpty()) "স্টাডি অ্যাপ বাছাই করা নেই — ফোকাসে পুরো ফোন লক থাকবে।"
             else "বাছাই করা: " + preset.sorted().joinToString(", ") { appLabel(it) }
-        ))
+        ).apply { setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) })
         Store.focusEndMs(this).takeIf { it > System.currentTimeMillis() }?.let {
-            root.addView(sub("ফোকাস চলছে, শেষ হবে: ${timeText(it)}"))
+            focusCard.addView(Ui.body(this, "ফোকাস চলছে, শেষ হবে: ${timeText(it)}").apply {
+                setTextColor(Ui.BRIGHT)
+                setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0)
+            })
         }
+        root.addView(focusCard)
 
-        root.addView(section("📅 লক শিডিউল (ঐচ্ছিক — প্রতিদিন একই সময়ে)"))
-        scheduleList()
-        root.addView(button("＋ নতুন শিডিউল যোগ করো") { addScheduleFlow() })
+        // ---- Schedule card (optional) ----
+        scheduleCard = Ui.card(this)
+        scheduleCard.addView(Ui.cardTitle(this, "লক শিডিউল"))
+        scheduleCard.addView(Ui.label(this, "ঐচ্ছিক — প্রতিদিন একই সময়ে অটো লক"))
+        scheduleList(scheduleCard)
+        scheduleCard.addView(Ui.secondaryButton(this, "নতুন শিডিউল যোগ করো") { addScheduleFlow() })
+        root.addView(scheduleCard)
 
-        root.addView(section("📱 অ্যাপ লিমিট (প্রতিদিন)"))
-        appLimitList()
-        root.addView(button("＋ অ্যাপে লিমিট বসাও") { addLimitFlow() })
+        // ---- App limits card ----
+        limitsCard = Ui.card(this)
+        limitsCard.addView(Ui.cardTitle(this, "অ্যাপ লিমিট"))
+        limitsCard.addView(Ui.label(this, "প্রতিদিনের সীমা — পার হলেই সেদিনের জন্য বন্ধ"))
+        appLimitList(limitsCard)
+        limitsCard.addView(Ui.secondaryButton(this, "অ্যাপে লিমিট বসাও") { addLimitFlow() })
+        root.addView(limitsCard)
 
-        root.addView(section("🛡 সুরক্ষা"))
-        pendingInfo()
-        root.addView(button("PIN সেট / বদলাও") { setPinFlow() })
-        root.addView(button("Protection Off করার আবেদন (24 ঘণ্টা লাগবে)") {
+        // ---- Security card ----
+        securityCard = Ui.card(this)
+        securityCard.addView(Ui.cardTitle(this, "সুরক্ষা"))
+        pendingInfo(securityCard)
+        securityCard.addView(Ui.secondaryButton(this, "PIN সেট / বদলাও") { setPinFlow() })
+        securityCard.addView(Ui.secondaryButton(this, "Protection Off করার আবেদন (24 ঘণ্টা লাগবে)") {
             verifyPin {
                 requestWeakening("protection_off", "Protection Off")
             }
         })
         if (!Store.isProtectionOn(this)) {
-            root.addView(button("Protection আবার On করো") {
+            securityCard.addView(Ui.primaryButton(this, "Protection আবার On করো") {
                 Store.setProtectionOn(this, true)
                 AdminHelper.applyStrictPolicies(this)
                 toast("Protection On হয়েছে")
                 buildUi()
             })
         }
+        root.addView(securityCard)
 
-        root.addView(section("📜 ট্যাম্পার লগ"))
+        // ---- Tamper log card ----
+        val logCard = Ui.card(this)
+        logCard.addView(Ui.cardTitle(this, "ট্যাম্পার লগ"))
         val log = Store.tamperLog(this)
-        root.addView(sub(if (log.isBlank()) "এখনো কোনো চেষ্টা হয়নি।" else log.lines().takeLast(20).joinToString("\n")))
+        logCard.addView(Ui.secondary(this,
+            if (log.isBlank()) "এখনো কোনো চেষ্টা হয়নি।"
+            else log.lines().takeLast(20).joinToString("\n")
+        ))
+        root.addView(logCard)
     }
 
-    private fun title(t: String) = TextView(this).apply { text = t; textSize = 28f }
-    private fun section(t: String) = TextView(this).apply {
-        text = t; textSize = 20f; setPadding(0, 48, 0, 12)
-    }
-    private fun sub(t: String) = TextView(this).apply { text = t; textSize = 15f }
-    private fun button(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t; setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-    }
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     private fun timeText(ms: Long) =
         SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(ms))
     private fun minText(mins: Int) = "%02d:%02d".format(mins / 60, mins % 60)
 
-    private fun statusLines(): TextView {
-        val owner = AdminHelper.isDeviceOwner(this)
-        val admin = AdminHelper.isAdminActive(this)
-        val acc = AdminHelper.isAccessibilityOn(this)
-        val usage = AdminHelper.hasUsageAccess(this)
-        val overlay = AdminHelper.hasOverlayPermission(this)
-        val prot = Store.isProtectionOn(this)
-        fun yn(b: Boolean) = if (b) "✅" else "❌"
-        return sub(
-            """
-            ${yn(owner)} Device Owner (সবচেয়ে কড়া — আনইনস্টল আটকানো)
-            ${yn(admin)} Device Admin
-            ${yn(acc)} Accessibility (অ্যাপ ব্লকার)
-            ${yn(usage)} Usage Access (অ্যাপ লিমিটের হিসাব)
-            ${yn(overlay)} Overlay Permission
-            ${yn(prot)} Protection ${if (prot) "On" else "Off"}
-            """.trimIndent()
-        )
-    }
-
-    private fun setupButtons() {
-        root.addView(button("Device Admin চালু করো") {
+    private fun setupButtons(card: LinearLayout) {
+        card.addView(Ui.secondaryButton(this, "Device Admin চালু করো") {
             val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
                 putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, AdminHelper.adminComponent(this@MainActivity))
                 putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "FocusLock-এর কড়া সুরক্ষার জন্য দরকার।")
             }
             startActivity(intent)
         })
-        root.addView(button("Accessibility চালু করো") {
+        card.addView(Ui.secondaryButton(this, "Accessibility চালু করো") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
-        root.addView(button("Usage Access দাও") {
+        card.addView(Ui.secondaryButton(this, "Usage Access দাও") {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         })
-        root.addView(button("Overlay Permission দাও") {
+        card.addView(Ui.secondaryButton(this, "Overlay Permission দাও") {
             startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -163,7 +176,7 @@ class MainActivity : AppCompatActivity() {
                 )
             )
         })
-        root.addView(button("📋 ADB কমান্ড কপি করো (Device Owner-এর জন্য)") {
+        card.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Device Owner-এর জন্য)") {
             val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("FocusLock ADB", cmd))
@@ -173,30 +186,37 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------- schedules ----------------
 
-    private fun scheduleList() {
+    private fun scheduleList(card: LinearLayout) {
         val list = Store.schedules(this)
         if (list.isEmpty()) {
-            root.addView(sub("কোনো শিডিউল নেই। যেমন: রাত 11:00 → ভোর 5:00।"))
+            card.addView(Ui.secondary(this, "কোনো শিডিউল নেই। যেমন: রাত 11:00 → ভোর 5:00।"))
             return
         }
         val dayNames = listOf("সোম", "মঙ্গল", "বুধ", "বৃহস্পতি", "শুক্র", "শনি", "রবি")
         for (s in list) {
             val days = if (s.daysMask == 127) "প্রতিদিন"
             else (0..6).filter { s.daysMask and (1 shl it) != 0 }.joinToString(", ") { dayNames[it] }
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+            }
             row.addView(TextView(this).apply {
                 text = "${s.label} — ${minText(s.startMin)} → ${minText(s.endMin)} ($days)"
+                textSize = 14f; setTextColor(Ui.TEXT)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(Button(this).apply {
-                text = "মুছুন"
+                text = "মুছুন"; isAllCaps = false; textSize = 12f
+                setTextColor(Ui.MUTED)
+                background = GradientDrawableHelper.raised(this@MainActivity)
                 setOnClickListener {
                     verifyPin {
                         requestWeakening("delete_schedule:${s.id}", "শিডিউল মোছা (${s.label})")
                     }
                 }
             })
-            root.addView(row)
+            card.addView(row)
         }
     }
 
@@ -245,7 +265,7 @@ class MainActivity : AppCompatActivity() {
     private fun startFocus(minutes: Int) {
         AlertDialog.Builder(this)
             .setTitle("$minutes মিনিট ফোকাস?")
-            .setMessage("শুরু করলে সময় শেষ হওয়ার আগে কোনোভাবেই বাতিল করা যাবে না। পরের ধাপে বাছাই করো এই সেশনে কোন অ্যাপগুলো চলবে — বাকি সব সঙ্গে সঙ্গে ব্লক হয়ে যাবে।")
+            .setMessage("শুরু করলে সময় শেষ হওয়ার আগে কোনোভাবেই বাতিল করা যাবে না। পরের ধাপে বাছাই করো এই সেশনে কোন অ্যাপগুলো চলবে — বাকি সব সঙ্গে সঙ্গে ব্লক হয়ে যাবে। নোটিফিকেশন প্যানেলও খুলবে না।")
             .setPositiveButton("পরের ধাপ") { _, _ ->
                 pickAppsMulti(
                     "এই সেশনে কোন অ্যাপ চলবে?",
@@ -262,6 +282,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton("না", null).show()
+    }
+
+    private fun customFocusFlow() {
+        val input = EditText(this).apply {
+            hint = "কত মিনিট? যেমন: 45, 90, 180"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        }
+        AlertDialog.Builder(this).setTitle("কাস্টম ফোকাস").setView(input)
+            .setPositiveButton("পরের ধাপ") { _, _ ->
+                val mins = input.text.toString().toIntOrNull()
+                if (mins == null || mins < 1 || mins > 24 * 60) {
+                    toast("1 থেকে 1440 মিনিটের মধ্যে দাও")
+                } else {
+                    startFocus(mins)
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
     }
 
     // ---- focus whitelist picking ----
@@ -297,46 +334,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun customFocusFlow() {
-        val input = EditText(this).apply {
-            hint = "কত মিনিট? যেমন: 45, 90, 180"
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
-        AlertDialog.Builder(this).setTitle("কাস্টম ফোকাস").setView(input)
-            .setPositiveButton("পরের ধাপ") { _, _ ->
-                val mins = input.text.toString().toIntOrNull()
-                if (mins == null || mins < 1 || mins > 24 * 60) {
-                    toast("1 থেকে 1440 মিনিটের মধ্যে দাও")
-                } else {
-                    startFocus(mins)
-                }
-            }
-            .setNegativeButton("বাতিল", null).show()
-    }
-
     // ---------------- app limits ----------------
 
-    private fun appLimitList() {
+    private fun appLimitList(card: LinearLayout) {
         val list = Store.appLimits(this)
         if (list.isEmpty()) {
-            root.addView(sub("কোনো লিমিট নেই। যেমন: YouTube — দিনে 30 মিনিট।"))
+            card.addView(Ui.secondary(this, "কোনো লিমিট নেই। যেমন: YouTube — দিনে 30 মিনিট।"))
             return
         }
         for (limit in list) {
             val used = Blocker.usageTodayMs(this, limit.pkg) / 60000
             val label = appLabel(limit.pkg)
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+            }
             row.addView(TextView(this).apply {
                 text = "$label — আজ $used / ${limit.limitMinutes} মিনিট"
+                textSize = 14f; setTextColor(Ui.TEXT)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(Button(this).apply {
-                text = "তুলে নিন"
+                text = "তুলে নিন"; isAllCaps = false; textSize = 12f
+                setTextColor(Ui.MUTED)
+                background = GradientDrawableHelper.raised(this@MainActivity)
                 setOnClickListener {
                     verifyPin { requestWeakening("remove_limit:${limit.pkg}", "$label-এর লিমিট তোলা") }
                 }
             })
-            root.addView(row)
+            card.addView(row)
         }
     }
 
@@ -420,9 +447,9 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * The heart of "strict": a weakening change never happens now.
-     * It is queued, shown on screen, and only applies 24 hours later —
-     * and only if the user does not cancel it... no, cancelling a pending
-     * weakening is also behind the PIN, and the pending state is always visible.
+     * It is queued, shown on screen, and only applies 24 hours later.
+     * Cancelling a pending weakening is also behind the PIN, and the
+     * pending state is always visible in the Security card.
      */
     private fun requestWeakening(action: String, description: String) {
         val executeAt = System.currentTimeMillis() + Store.WEAKEN_DELAY_MS
@@ -430,15 +457,15 @@ class MainActivity : AppCompatActivity() {
         Store.logTamper(this, "Weakening requested: $description -> applies at $executeAt")
         AlertDialog.Builder(this)
             .setTitle("আবেদন জমা হয়েছে")
-            .setMessage("$description এখনই হবে না। 24 ঘণ্টা পর, ${timeText(executeAt)}-এ কার্যকর হবে। তার আগে মন বদলালে নিচের 'Pending বাতিল' দিয়ে থামানো যাবে (PIN লাগবে)।")
+            .setMessage("$description এখনই হবে না। 24 ঘণ্টা পর, ${timeText(executeAt)}-এ কার্যকর হবে। তার আগে মন বদলালে 'Pending বাতিল' দিয়ে থামানো যাবে (PIN লাগবে)।")
             .setPositiveButton("বুঝেছি", null).show()
         buildUi()
     }
 
-    private fun pendingInfo() {
+    private fun pendingInfo(card: LinearLayout) {
         val (action, at) = Store.pendingAction(this) ?: return
-        root.addView(sub("⏳ Pending পরিবর্তন: $action\nকার্যকর হবে: ${timeText(at)} (${Blocker.formatRemaining(at)} বাকি)"))
-        root.addView(button("Pending বাতিল করো") {
+        card.addView(Ui.secondary(this, "Pending পরিবর্তন: $action\nকার্যকর হবে: ${timeText(at)} (${Blocker.formatRemaining(at)} বাকি)"))
+        card.addView(Ui.secondaryButton(this, "Pending বাতিল করো") {
             verifyPin {
                 Store.clearPendingAction(this)
                 Store.logTamper(this, "Pending weakening cancelled")
@@ -447,4 +474,15 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
+}
+
+/** Small raised-pill background for inline row buttons (design system). */
+object GradientDrawableHelper {
+    fun raised(ctx: Context): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            setColor(Ui.RAISED)
+            cornerRadius = Ui.dp(ctx, 14).toFloat()
+            setStroke(Ui.dp(ctx, 1), Ui.STROKE)
+        }
 }
