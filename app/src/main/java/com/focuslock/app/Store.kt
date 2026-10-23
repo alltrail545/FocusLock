@@ -45,6 +45,25 @@ data class AppLimit(val pkg: String, val limitMinutes: Int) {
     }
 }
 
+/** A named one-tap focus preset (v1.4): name + minutes + picked apps. */
+data class FocusPreset(val name: String, val minutes: Int, val allowed: Set<String>) {
+    fun serialize(): String =
+        listOf(name.replace("|", " ").replace(";", " "), minutes, allowed.joinToString(","))
+            .joinToString("|")
+
+    companion object {
+        fun parse(s: String): FocusPreset? {
+            val p = s.split("|")
+            if (p.size != 3) return null
+            return FocusPreset(
+                p[0],
+                p[1].toIntOrNull() ?: return null,
+                if (p[2].isBlank()) emptySet() else p[2].split(",").filter { it.isNotBlank() }.toSet()
+            )
+        }
+    }
+}
+
 /**
  * All persistent state. SharedPreferences only — no account, no cloud,
  * nothing leaves the phone. This app is personal by design.
@@ -149,6 +168,10 @@ object Store {
                     saveAppLimits(ctx, list)
                 }
             }
+            action.startsWith("remove_site:") -> {
+                val host = action.removePrefix("remove_site:")
+                saveBlockedSites(ctx, blockedSites(ctx).filter { it != host })
+            }
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -156,6 +179,127 @@ object Store {
         }
         logTamper(ctx, "Pending change applied after 24h: $action")
         clearPendingAction(ctx)
+    }
+
+    // ---- v1.4 additions ----
+
+    /** When the running focus session started (for the focus report). */
+    fun focusStartMs(ctx: Context): Long = prefs(ctx).getLong("focus_start_ms", 0L)
+    fun setFocusStartMs(ctx: Context, ms: Long) =
+        prefs(ctx).edit().putLong("focus_start_ms", ms).apply()
+
+    /** Silence notifications (Do Not Disturb) while a focus session / full lock runs. */
+    fun silenceDuringLock(ctx: Context): Boolean = prefs(ctx).getBoolean("silence_during_lock", true)
+    fun setSilenceDuringLock(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("silence_during_lock", on).apply()
+
+    // ---- named focus presets ----
+    fun focusPresets(ctx: Context): List<FocusPreset> =
+        (prefs(ctx).getString("focus_presets", "") ?: "")
+            .split(";").filter { it.isNotBlank() }.mapNotNull { FocusPreset.parse(it) }
+
+    fun saveFocusPresets(ctx: Context, list: List<FocusPreset>) =
+        prefs(ctx).edit().putString("focus_presets", list.joinToString(";") { it.serialize() }).apply()
+
+    // ---- blocked websites (checked in Chrome via accessibility, v1.4) ----
+    fun blockedSites(ctx: Context): List<String> =
+        (prefs(ctx).getString("blocked_sites", "") ?: "")
+            .split(";").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+
+    fun saveBlockedSites(ctx: Context, list: List<String>) =
+        prefs(ctx).edit().putString("blocked_sites",
+            list.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().joinToString(";")).apply()
+
+    /** Transient: a blocked site is being shown the lock screen until this time. */
+    @Volatile var siteBlockUntilMs: Long = 0L
+    @Volatile var siteBlockHost: String = ""
+
+    // ---- focus history for the report: "yyyy-MM-dd=minutes;..." ----
+    private fun dayKey(offsetDays: Int = 0): String {
+        val cal = java.util.Calendar.getInstance()
+        cal.add(java.util.Calendar.DAY_OF_YEAR, offsetDays)
+        return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(cal.time)
+    }
+
+    fun recordFocusMinutes(ctx: Context, minutes: Int) {
+        if (minutes <= 0) return
+        val map = focusHistory(ctx).toMutableMap()
+        val key = dayKey()
+        map[key] = (map[key] ?: 0) + minutes
+        val ser = map.entries.sortedBy { it.key }
+            .joinToString(";") { "${it.key}=${it.value}" }
+        prefs(ctx).edit().putString("focus_history", ser).apply()
+    }
+
+    fun focusHistory(ctx: Context): Map<String, Int> =
+        (prefs(ctx).getString("focus_history", "") ?: "")
+            .split(";").filter { it.contains("=") }
+            .associate { part ->
+                val kv = part.split("=", limit = 2)
+                kv[0] to (kv[1].toIntOrNull() ?: 0)
+            }
+
+    fun focusMinutesToday(ctx: Context): Int = focusHistory(ctx)[dayKey()] ?: 0
+
+    fun focusMinutesLast7Days(ctx: Context): Int =
+        (0..6).sumOf { focusHistory(ctx)[dayKey(-it)] ?: 0 }
+
+    /** Consecutive days (today or yesterday backwards) with at least one focus session. */
+    fun focusStreakDays(ctx: Context): Int {
+        val hist = focusHistory(ctx)
+        var streak = 0
+        var offset = if ((hist[dayKey()] ?: 0) > 0) 0 else -1
+        while ((hist[dayKey(offset)] ?: 0) > 0) {
+            streak++
+            offset--
+        }
+        return streak
+    }
+
+    // ---- settings backup / restore (v1.4): JSON via the system file picker ----
+    fun exportJson(ctx: Context): String {
+        val o = org.json.JSONObject()
+        o.put("version", 1)
+        o.put("protection_on", isProtectionOn(ctx))
+        o.put("silence_during_lock", silenceDuringLock(ctx))
+        o.put("schedules", org.json.JSONArray(schedules(ctx).map { it.serialize() }))
+        o.put("app_limits", org.json.JSONArray(appLimits(ctx).map { it.serialize() }))
+        o.put("focus_default_allowed", org.json.JSONArray(focusDefaultAllowed(ctx).toList()))
+        o.put("focus_presets", org.json.JSONArray(focusPresets(ctx).map { it.serialize() }))
+        o.put("blocked_sites", org.json.JSONArray(blockedSites(ctx)))
+        return o.toString(2)
+    }
+
+    fun importJson(ctx: Context, json: String): Boolean {
+        return try {
+            val o = org.json.JSONObject(json)
+            if (o.has("protection_on")) setProtectionOn(ctx, o.getBoolean("protection_on"))
+            if (o.has("silence_during_lock")) setSilenceDuringLock(ctx, o.getBoolean("silence_during_lock"))
+            if (o.has("schedules")) {
+                val arr = o.getJSONArray("schedules")
+                saveSchedules(ctx, (0 until arr.length()).mapNotNull { Schedule.parse(arr.getString(it)) })
+            }
+            if (o.has("app_limits")) {
+                val arr = o.getJSONArray("app_limits")
+                saveAppLimits(ctx, (0 until arr.length()).mapNotNull { AppLimit.parse(arr.getString(it)) })
+            }
+            if (o.has("focus_default_allowed")) {
+                val arr = o.getJSONArray("focus_default_allowed")
+                saveFocusDefaultAllowed(ctx, (0 until arr.length()).map { arr.getString(it) }.toSet())
+            }
+            if (o.has("focus_presets")) {
+                val arr = o.getJSONArray("focus_presets")
+                saveFocusPresets(ctx, (0 until arr.length()).mapNotNull { FocusPreset.parse(arr.getString(it)) })
+            }
+            if (o.has("blocked_sites")) {
+                val arr = o.getJSONArray("blocked_sites")
+                saveBlockedSites(ctx, (0 until arr.length()).map { arr.getString(it) })
+            }
+            logTamper(ctx, "Settings restored from backup file")
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // ---- tamper / event log (last 100 lines, shown in the app) ----
