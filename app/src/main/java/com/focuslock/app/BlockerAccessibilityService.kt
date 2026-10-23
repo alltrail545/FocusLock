@@ -18,6 +18,30 @@ import android.view.accessibility.AccessibilityEvent
  */
 class BlockerAccessibilityService : AccessibilityService() {
 
+    // v1.3 silent engine: this service is system-bound for as long as the
+    // user keeps Accessibility on, and it never shows in the system's
+    // "Running Apps" sheet. So the 1s enforcement tick lives HERE while
+    // idle; Engine starts the foreground BlockingService only for the
+    // duration of an actual lock/focus session.
+    private val watchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val watchdog = object : Runnable {
+        override fun run() {
+            Engine.tick(this@BlockerAccessibilityService)
+            watchdogHandler.postDelayed(this, 1000)
+        }
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        watchdogHandler.removeCallbacks(watchdog)
+        watchdogHandler.post(watchdog)
+    }
+
+    override fun onDestroy() {
+        watchdogHandler.removeCallbacks(watchdog)
+        super.onDestroy()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
