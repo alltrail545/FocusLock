@@ -11,8 +11,8 @@ android {
         applicationId = "com.focuslock.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10402 // 1.4.2 = major*10000 + minor*100 + patch
-        versionName = "1.4.2"
+        versionCode = 10500 // 1.5.0 = major*10000 + minor*100 + patch
+        versionName = "1.5.0"
     }
 
     buildTypes {
