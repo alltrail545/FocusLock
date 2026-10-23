@@ -4,22 +4,21 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
 import android.content.Intent
-import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * The lock screen itself.
+ * The lock screen itself, styled with the FocusLock design system.
  *  - Back button does nothing. Home/recent are neutralised by LockTask (kiosk)
  *    pinning when Device Owner is set, and by the service/accessibility loop otherwise.
+ *  - The notification shade / control panel is guarded three ways: the top-strip
+ *    overlay in BlockingService, the accessibility collapse on SystemUI, and
+ *    setStatusBarDisabled under Device Owner.
  *  - Only two exits exist: the timer ending, or the emergency dialer.
  */
 class LockActivity : Activity() {
@@ -52,7 +51,7 @@ class LockActivity : Activity() {
                         handler.postDelayed(this, 1000)
                     } else {
                         reasonView.text = "ফোকাস চলছে — এই অ্যাপটা বাছাই করা হয়নি"
-                        countdown.text = "বাকি: ${Blocker.formatRemaining(state.untilMs)}\nনিচে থেকে বাছাই-করা অ্যাপ খোলো"
+                        countdown.text = "বাকি: ${Blocker.formatRemaining(state.untilMs)}"
                         handler.postDelayed(this, 1000)
                     }
                 }
@@ -60,8 +59,6 @@ class LockActivity : Activity() {
                     reasonView.text = "এই অ্যাপের আজকের সময় শেষ"
                     countdown.text = "কাল আবার ব্যবহার করা যাবে"
                     handler.postDelayed(this, 2000)
-                    // AppBlocked is handled by suspension + sending home; if the user
-                    // is no longer in that app, currentBlock() returns None next tick.
                     if (Store.lastForegroundPkg != state.pkg) finishLock()
                 }
                 BlockState.None -> finishLock()
@@ -83,72 +80,60 @@ class LockActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#0B1F1D"))
-            setPadding(64, 64, 64, 64)
+            setBackgroundColor(Ui.BG)
+            setPadding(Ui.dp(this@LockActivity, 24), Ui.dp(this@LockActivity, 24),
+                Ui.dp(this@LockActivity, 24), Ui.dp(this@LockActivity, 24))
         }
-        val lockEmoji = TextView(this).apply {
-            text = "🔒"; textSize = 64f; gravity = Gravity.CENTER
-        }
-        val title = TextView(this).apply {
-            text = "FocusLock"; textSize = 32f; gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-        }
+
+        val card = Ui.card(this)
+        card.gravity = Gravity.CENTER_HORIZONTAL
+        card.addView(Ui.label(this, "FOCUSLOCK").apply { gravity = Gravity.CENTER })
         reasonView = TextView(this).apply {
-            text = "লক টাইম"; textSize = 20f; gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#5EEAD4"))
-            setPadding(0, 24, 0, 0)
+            textSize = 20f; gravity = Gravity.CENTER; setTextColor(Ui.TEXT)
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            setPadding(0, Ui.dp(this@LockActivity, 8), 0, 0)
+            text = "লক টাইম"
         }
         countdown = TextView(this).apply {
-            text = ""; textSize = 22f; gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setPadding(0, 16, 0, 48)
+            textSize = 14f; gravity = Gravity.CENTER; setTextColor(Ui.BRIGHT)
+            setPadding(0, Ui.dp(this@LockActivity, 6), 0, 0)
+            text = ""
         }
-        val callBtn = Button(this).apply {
-            text = "📞  জরুরি কল"
-            setOnClickListener {
-                // Dialer is whitelisted in LockTask, so this opens and returns here after.
-                startActivity(Intent(Intent.ACTION_DIAL).apply {
+        card.addView(reasonView)
+        card.addView(countdown)
+        root.addView(card)
+
+        root.addView(Ui.secondaryButton(this, "জরুরি কল") {
+            // Dialer is whitelisted in LockTask, so this opens and returns here after.
+            startActivity(Intent(Intent.ACTION_DIAL).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        })
+        root.addView(Ui.secondaryButton(this, "অ্যালার্ম / ঘড়ি") {
+            try {
+                startActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 })
-            }
-        }
-        val clockBtn = Button(this).apply {
-            text = "⏰  অ্যালার্ম / ঘড়ি"
-            setOnClickListener {
+            } catch (e: Exception) {
                 try {
-                    startActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                } catch (e: Exception) {
-                    try {
-                        startActivity(packageManager.getLaunchIntentForPackage("com.google.android.deskclock")!!)
-                    } catch (_: Exception) { }
-                }
+                    startActivity(packageManager.getLaunchIntentForPackage("com.google.android.deskclock")!!)
+                } catch (_: Exception) { }
             }
-        }
-        root.addView(lockEmoji); root.addView(title); root.addView(reasonView)
-        root.addView(countdown); root.addView(callBtn); root.addView(clockBtn)
+        })
 
         // Whitelisted study apps for this focus session (if any were picked):
         // one tap opens the app; leaving it for anything unpicked re-locks instantly.
         val sessionAllowed = Store.focusSessionAllowed(this)
         if (sessionAllowed.isNotEmpty() && Store.focusEndMs(this) > System.currentTimeMillis()) {
-            root.addView(TextView(this).apply {
-                text = "📚 এই সেশনে যেগুলো চলবে:"
-                setTextColor(Color.parseColor("#5EEAD4"))
-                gravity = Gravity.CENTER
-                setPadding(0, 40, 0, 8)
-            })
+            root.addView(Ui.gap(this, 16))
+            root.addView(Ui.label(this, "এই সেশনে যেগুলো চলবে").apply { gravity = Gravity.CENTER })
             for (pkg in sessionAllowed.sorted()) {
-                root.addView(Button(this).apply {
-                    text = appLabel(pkg)
-                    setOnClickListener {
-                        val launch = packageManager.getLaunchIntentForPackage(pkg)
-                        if (launch != null) {
-                            Store.lastForegroundPkg = pkg
-                            startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            if (lockTaskStarted) moveTaskToBack(true) else finish()
-                        }
+                root.addView(Ui.secondaryButton(this, appLabel(pkg)) {
+                    val launch = packageManager.getLaunchIntentForPackage(pkg)
+                    if (launch != null) {
+                        Store.lastForegroundPkg = pkg
+                        startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        if (lockTaskStarted) moveTaskToBack(true) else finish()
                     }
                 })
             }
@@ -157,6 +142,18 @@ class LockActivity : Activity() {
 
         enterLockTaskIfOwner()
         handler.post(tick)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) {
+            // Something (usually the shade) took focus over the lock. Best-effort
+            // collapse; the accessibility guard + overlay strip do the heavy lifting.
+            try {
+                @Suppress("DEPRECATION")
+                sendBroadcast(Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS))
+            } catch (_: Exception) { }
+        }
     }
 
     private fun appLabel(pkg: String): String = try {
