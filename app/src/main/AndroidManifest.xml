@@ -62,6 +62,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Automation API (v1.6.0): explicit broadcasts from PhoneLink.
+             Exported on purpose — every command is gated by a token whose
+             SHA-256 is stored in Settings; without a token set, all
+             commands are ignored. -->
+        <receiver
+            android:name=".AutomationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.focuslock.app.AUTOMATION" />
+            </intent-filter>
+        </receiver>
+
         <!-- Restart the engine after reboot -->
         <receiver
             android:name=".BootReceiver"
