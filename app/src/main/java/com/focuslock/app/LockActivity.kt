@@ -231,12 +231,15 @@ class LockActivity : Activity() {
         try {
             val dpm = getSystemService(DevicePolicyManager::class.java)
             val am = getSystemService(ActivityManager::class.java)
-            if (dpm.isLockTaskPermitted(packageName) &&
-                am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE
-            ) {
-                startLockTask()
+            if (dpm.isLockTaskPermitted(packageName)) {
+                if (am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
+                    startLockTask()
+                    try { dpm.setStatusBarDisabled(AdminHelper.adminComponent(this), true) } catch (_: Exception) {}
+                }
+                // v1.5.1: adopt the pin even when a previous (recreated)
+                // instance started it — otherwise finishLock() would not
+                // know it must stop LockTask and the phone could stay pinned.
                 lockTaskStarted = true
-                try { dpm.setStatusBarDisabled(AdminHelper.adminComponent(this), true) } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             Store.logTamper(this, "startLockTask failed: ${e.message}")
@@ -264,6 +267,13 @@ class LockActivity : Activity() {
     override fun onDestroy() {
         isShowing = false
         handler.removeCallbacks(tick)
+        // v1.5.1 fallback: if this lock screen is genuinely finishing while
+        // a LockTask pin is held, release the pin here too — the phone must
+        // never be stranded in kiosk mode by a destroyed lock activity.
+        if (isFinishing && lockTaskStarted) {
+            try { stopLockTask() } catch (_: Exception) { }
+            lockTaskStarted = false
+        }
         super.onDestroy()
     }
 
