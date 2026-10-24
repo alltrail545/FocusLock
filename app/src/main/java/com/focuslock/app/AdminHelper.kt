@@ -85,32 +85,77 @@ object AdminHelper {
         }
     }
 
+    // ---- v1.5.1 safety: packages that must NEVER be suspended ----
+    // Suspending one of these in Device Owner mode could strand the phone:
+    // no launcher to go home to, no Settings to recover with, no dialer.
+    // The audit Tamim brought was right about this hole.
+    private val protectedPackages = setOf(
+        "com.android.settings",
+        "com.android.systemui",
+        "com.android.shell",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.termux" // recovery tool — never take it away
+    )
+
+    private var homePkgCache: String? = null
+    private fun homePackage(ctx: Context): String? {
+        if (homePkgCache != null) return homePkgCache
+        homePkgCache = try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            ctx.packageManager.resolveActivity(intent, 0)?.activityInfo?.packageName
+        } catch (_: Exception) { null }
+        return homePkgCache
+    }
+
+    fun isProtectedPackage(ctx: Context, pkg: String): Boolean {
+        if (pkg == ctx.packageName) return true
+        if (pkg in protectedPackages) return true
+        // Whatever THIS phone uses as launcher / dialer / clock is protected,
+        // whatever its OEM package name happens to be.
+        if (pkg == homePackage(ctx)) return true
+        if (pkg == dialerPackage(ctx)) return true
+        if (pkg in clockPackages(ctx)) return true
+        return false
+    }
+
     /** Suspend (temporarily disable) an app that crossed its daily limit. Device Owner only. */
     fun suspendApp(ctx: Context, pkg: String, suspended: Boolean) {
         if (!isDeviceOwner(ctx)) return
+        if (isProtectedPackage(ctx, pkg)) {
+            Store.logTamper(ctx, "Refused to suspend protected package: $pkg")
+            return
+        }
         try {
-            dpm(ctx).setPackagesSuspended(adminComponent(ctx), arrayOf(pkg), suspended)
+            val failed = dpm(ctx).setPackagesSuspended(adminComponent(ctx), arrayOf(pkg), suspended)
+            if (failed.isEmpty()) {
+                // Ledger: the emergency exit restores from this list, so a
+                // suspension can never be orphaned by a deleted limit.
+                if (suspended) Store.ledgerAdd(ctx, pkg) else Store.ledgerRemove(ctx, pkg)
+            } else {
+                Store.logTamper(ctx, "suspendApp($pkg, $suspended) failed for: ${failed.joinToString()}")
+            }
         } catch (e: Exception) {
             Store.logTamper(ctx, "suspendApp($pkg) failed: ${e.message}")
         }
     }
 
     /**
-     * Emergency exit (v1.5, Stage B): remove Device Owner SAFELY, in the
-     * only safe order — release everything the owner holds BEFORE giving
-     * up ownership, otherwise suspended/hidden apps and restrictions
-     * would be stranded forever with nobody able to lift them:
-     *   1. status bar back on, LockTask whitelist emptied
-     *   2. every user restriction we set is cleared
-     *   3. our own uninstall-block lifted
-     *   4. every limited app un-suspended AND un-hidden (loop — an app
-     *      left hidden after owner removal could never be brought back
-     *      from the UI; this is the stranded-app trap)
-     *   5. only then: clearDeviceOwnerApp + removeActiveAdmin
-     * Reached only via the PIN + 24h pending-weakening path in the app.
-     * Each step is isolated so one failure cannot strand the rest.
+     * Emergency exit (v1.5, Stage B; v1.5.1 VERIFIED cleanup): remove
+     * Device Owner safely. The rule, from Tamim's safety audit: ownership
+     * is revoked ONLY after every critical cleanup is verified done —
+     * restrictions actually off, uninstall-block actually lifted, every
+     * managed package actually restored. Any failure ABORTS the exit
+     * (owner stays, so a retry is possible) and is surfaced in the UI via
+     * Store's exit-failed flag, never just swallowed.
+     *
+     * Order: status bar + LockTask whitelist → restrictions (verified) →
+     * own uninstall-block (verified) → packages from the persistent
+     * ledger ∪ current limits (verified per package) → clearDeviceOwnerApp
+     * (verified) → removeActiveAdmin.
+     * Returns true only when the device is verifiably owner-free.
      */
-    fun safelyRemoveDeviceOwner(ctx: Context) {
+    fun safelyRemoveDeviceOwner(ctx: Context): Boolean {
         val dpm = dpm(ctx)
         val admin = adminComponent(ctx)
         if (!isDeviceOwner(ctx)) {
@@ -118,27 +163,69 @@ object AdminHelper {
                 try { dpm.removeActiveAdmin(admin) } catch (_: Throwable) { }
                 Store.logTamper(ctx, "Device Admin removed (was not owner)")
             }
-            return
+            return true
         }
+
+        // Stage 1: release the visible holds (verified indirectly below).
         try { dpm.setStatusBarDisabled(admin, false) } catch (_: Throwable) { }
         try { dpm.setLockTaskPackages(admin, emptyArray()) } catch (_: Throwable) { }
-        for (r in listOf(
+
+        // Stage 2: clear every restriction we set — then VERIFY none remains.
+        val restrictions = listOf(
             android.os.UserManager.DISALLOW_SAFE_BOOT,
             android.os.UserManager.DISALLOW_FACTORY_RESET,
             android.os.UserManager.DISALLOW_CONFIG_DATE_TIME,
             android.os.UserManager.DISALLOW_DEBUGGING_FEATURES,
             android.os.UserManager.DISALLOW_ADD_USER
-        )) {
+        )
+        for (r in restrictions) {
             try { dpm.clearUserRestriction(admin, r) } catch (_: Throwable) { }
         }
-        try { dpm.setUninstallBlocked(admin, ctx.packageName, false) } catch (_: Throwable) { }
-        for (limit in Store.appLimits(ctx)) {
-            try { dpm.setPackagesSuspended(admin, arrayOf(limit.pkg), false) } catch (_: Throwable) { }
-            try { dpm.setApplicationHidden(admin, limit.pkg, false) } catch (_: Throwable) { }
+        val um = ctx.getSystemService(android.os.UserManager::class.java)
+        val stillOn = restrictions.filter {
+            try { um?.hasUserRestriction(it) == true } catch (_: Throwable) { false }
         }
+        if (stillOn.isNotEmpty()) {
+            Store.logTamper(ctx, "Emergency exit ABORTED — restrictions still active: $stillOn")
+            return false
+        }
+
+        // Stage 3: lift our own uninstall-block — VERIFIED by state.
+        try { dpm.setUninstallBlocked(admin, ctx.packageName, false) } catch (_: Throwable) { }
+        val uninstallStillBlocked =
+            try { dpm.isUninstallBlocked(admin, ctx.packageName) } catch (_: Throwable) { false }
+        if (uninstallStillBlocked) {
+            Store.logTamper(ctx, "Emergency exit ABORTED — uninstall still blocked")
+            return false
+        }
+
+        // Stage 4: restore every managed package (ledger ∪ current limits),
+        // VERIFIED per package. A package that cannot be restored aborts the
+        // exit — leaving it suspended/hidden with no owner would strand it.
+        val pkgs = (Store.ledgerPackages(ctx) + Store.appLimits(ctx).map { it.pkg }).distinct()
+        for (pkg in pkgs) {
+            val failed = try {
+                dpm.setPackagesSuspended(admin, arrayOf(pkg), false)
+            } catch (_: Throwable) { arrayOf(pkg) }
+            try { dpm.setApplicationHidden(admin, pkg, false) } catch (_: Throwable) { }
+            val stillHidden =
+                try { dpm.isApplicationHidden(admin, pkg) } catch (_: Throwable) { false }
+            if (failed.isNotEmpty() || stillHidden) {
+                Store.logTamper(ctx, "Emergency exit ABORTED — could not restore $pkg")
+                return false
+            }
+            Store.ledgerRemove(ctx, pkg)
+        }
+
+        // Stage 5: only now revoke ownership — VERIFIED.
         try { dpm.clearDeviceOwnerApp(ctx.packageName) } catch (_: Throwable) { }
+        if (isDeviceOwner(ctx)) {
+            Store.logTamper(ctx, "Emergency exit ABORTED — clearDeviceOwnerApp did not take effect")
+            return false
+        }
         try { dpm.removeActiveAdmin(admin) } catch (_: Throwable) { }
-        Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (after 24h delay)")
+        Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (verified cleanup)")
+        return true
     }
 
     /** At midnight rollover, un-suspend everything whose limit has reset. */
