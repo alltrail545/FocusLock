@@ -383,8 +383,11 @@ object Store {
         val pkg = p.getString("appblock_pkg", null) ?: return null
         val limit = p.getInt("appblock_limit", -1)
         if (limit < 0) return null
-        val current = appLimits(ctx).firstOrNull { it.pkg == pkg } ?: return null
-        if (current.limitMinutes != limit) return null
+        // Built-in limits (v1.5.3) latch too — they live outside appLimits.
+        val current = Blocker.BUILTIN_LIMIT_MINUTES[pkg]
+            ?: appLimits(ctx).firstOrNull { it.pkg == pkg }?.limitMinutes
+            ?: return null
+        if (current != limit) return null
         return pkg to limit
     }
 }
