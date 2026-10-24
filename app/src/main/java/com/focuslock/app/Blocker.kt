@@ -187,6 +187,13 @@ object Blocker {
                     return BlockState.AppBlocked(fg, fg)
                 }
             }
+            // 3b) Automation timed block (v1.6.0): PhoneLink asked for this
+            // app to stay blocked until a fixed clock time, independent of
+            // any daily limit.
+            val timedUntil = Store.timedAppBlocks(ctx)[fg]
+            if (timedUntil != null && timedUntil > System.currentTimeMillis()) {
+                return BlockState.AppBlocked(fg, fg)
+            }
         }
         return BlockState.None
     }
