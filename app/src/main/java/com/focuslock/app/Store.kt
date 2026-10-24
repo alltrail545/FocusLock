@@ -181,6 +181,10 @@ object Store {
                 val host = action.removePrefix("remove_site:")
                 saveBlockedSites(ctx, blockedSites(ctx).filter { it != host })
             }
+            action.startsWith("remove_category:") -> {
+                val id = action.removePrefix("remove_category:")
+                saveSiteCategories(ctx, siteCategories(ctx) - id)
+            }
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -223,6 +227,43 @@ object Store {
     fun saveBlockedSites(ctx: Context, list: List<String>) =
         prefs(ctx).edit().putString("blocked_sites",
             list.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().joinToString(";")).apply()
+
+    // ---- automation API (v1.6.0, built for PhoneLink com.mthtamim.phonelink) ----
+    /** SHA-256 hex of the automation token; empty = API off. Never the plain token. */
+    fun automationTokenHash(ctx: Context): String =
+        prefs(ctx).getString("automation_token_hash", "") ?: ""
+
+    fun setAutomationTokenHash(ctx: Context, hash: String) =
+        prefs(ctx).edit().putString("automation_token_hash", hash).apply()
+
+    /** Timed per-app blocks set by automation: package -> unblock time (ms). */
+    fun timedAppBlocks(ctx: Context): Map<String, Long> =
+        (prefs(ctx).getString("timed_app_blocks", "") ?: "")
+            .split(";").filter { it.isNotBlank() }.mapNotNull {
+                val p = it.split("=")
+                if (p.size == 2) {
+                    val until = p[1].toLongOrNull() ?: return@mapNotNull null
+                    p[0] to until
+                } else null
+            }.toMap()
+
+    fun saveTimedAppBlocks(ctx: Context, map: Map<String, Long>) =
+        prefs(ctx).edit().putString("timed_app_blocks",
+            map.entries.joinToString(";") { "${it.key}=${it.value}" }).apply()
+
+    /** True while the running focus session was started by automation. */
+    fun isAutoSession(ctx: Context): Boolean = prefs(ctx).getBoolean("auto_session", false)
+    fun setAutoSession(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("auto_session", on).apply()
+
+    // ---- website category filters (v1.6.0): enabled category ids ----
+    fun siteCategories(ctx: Context): Set<String> =
+        (prefs(ctx).getString("site_categories", "") ?: "")
+            .split(";").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+
+    fun saveSiteCategories(ctx: Context, ids: Set<String>) =
+        prefs(ctx).edit().putString("site_categories", ids.joinToString(";")).apply()
+
 
     /** Transient: a blocked site is being shown the lock screen until this time. */
     @Volatile var siteBlockUntilMs: Long = 0L
@@ -283,6 +324,7 @@ object Store {
         o.put("focus_default_allowed", org.json.JSONArray(focusDefaultAllowed(ctx).toList()))
         o.put("focus_presets", org.json.JSONArray(focusPresets(ctx).map { it.serialize() }))
         o.put("blocked_sites", org.json.JSONArray(blockedSites(ctx)))
+        o.put("site_categories", org.json.JSONArray(siteCategories(ctx).toList()))
         return o.toString(2)
     }
 
@@ -310,6 +352,10 @@ object Store {
             if (o.has("blocked_sites")) {
                 val arr = o.getJSONArray("blocked_sites")
                 saveBlockedSites(ctx, (0 until arr.length()).map { arr.getString(it) })
+            }
+            if (o.has("site_categories")) {
+                val arr = o.getJSONArray("site_categories")
+                saveSiteCategories(ctx, (0 until arr.length()).map { arr.getString(it) }.toSet())
             }
             logTamper(ctx, "Settings restored from backup file")
             true
