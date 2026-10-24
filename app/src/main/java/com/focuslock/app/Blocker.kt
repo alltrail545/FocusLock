@@ -124,6 +124,23 @@ object Blocker {
         }
     }
 
+    /**
+     * Limits compiled into the app itself (Tamim's explicit request, v1.5.3).
+     * They are NOT user limits: they never appear in the Limits tab, cannot
+     * be edited, raised or removed in-app (not even via the 24h weakening
+     * flow), and are not part of backup/restore. Termux gets 10 min/day —
+     * Tamim still needs it daily to run Shizuku and to administer this app,
+     * just not for long.
+     */
+    val BUILTIN_LIMIT_MINUTES: Map<String, Int> = mapOf(
+        "com.termux" to 10
+    )
+
+    /** The limit that actually applies to [pkg]: a built-in wins over any user entry. */
+    fun effectiveLimitMinutes(ctx: Context, pkg: String): Int? =
+        BUILTIN_LIMIT_MINUTES[pkg]
+            ?: Store.appLimits(ctx).firstOrNull { it.pkg == pkg }?.limitMinutes
+
     fun currentBlock(ctx: Context): BlockState {
         if (!Store.isProtectionOn(ctx)) return BlockState.None
         Store.applyPendingIfDue(ctx)
@@ -155,8 +172,8 @@ object Blocker {
         // 3) Per-app daily limit for the app currently in front.
         val fg = Store.lastForegroundPkg
         if (fg != null && fg !in alwaysAllowed(ctx)) {
-            val limit = Store.appLimits(ctx).firstOrNull { it.pkg == fg }
-            if (limit != null) {
+            val limitMin = effectiveLimitMinutes(ctx, fg)
+            if (limitMin != null) {
                 // v1.4.2 day latch: once this app crossed its limit today,
                 // the block holds for the rest of the day — a fluctuating
                 // usage re-read can never unlock it mid-day.
@@ -165,8 +182,8 @@ object Blocker {
                     return BlockState.AppBlocked(fg, fg)
                 }
                 val usedMin = usageTodayMs(ctx, fg) / 60000
-                if (usedMin >= limit.limitMinutes) {
-                    Store.latchAppBlock(ctx, fg, limit.limitMinutes)
+                if (usedMin >= limitMin) {
+                    Store.latchAppBlock(ctx, fg, limitMin)
                     return BlockState.AppBlocked(fg, fg)
                 }
             }
