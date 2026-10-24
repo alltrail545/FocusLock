@@ -752,7 +752,9 @@ class MainActivity : AppCompatActivity() {
     // ---------------- app limits ----------------
 
     private fun appLimitList(card: LinearLayout) {
-        val list = Store.appLimits(this)
+        // Built-in limits (e.g. Termux) are hidden here by design (v1.5.3):
+        // compiled in, not listed, not editable.
+        val list = Store.appLimits(this).filter { it.pkg !in Blocker.BUILTIN_LIMIT_MINUTES }
         if (list.isEmpty()) {
             card.addView(Ui.secondary(this, "কোনো লিমিট নেই। যেমন: YouTube — দিনে 30 মিনিট।"))
             return
