@@ -444,6 +444,26 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
+        // ---- category filters (v1.6.0): one tap blocks a whole category ----
+        siteCard.addView(Ui.label(this, "ক্যাটাগরি ফিল্টার — এক ট্যাপে পুরো ক্যাটাগরির সব সাইট ব্লক"))
+        val enabledCats = Store.siteCategories(this)
+        for (cat in SiteCategories.ALL) {
+            if (cat.id in enabledCats) {
+                siteCard.addView(Ui.body(this, "${cat.labelBn} — চালু আছে (${cat.domains.size}টি সাইট)"))
+                siteCard.addView(Ui.secondaryButton(this, "বন্ধ করো: ${cat.labelBn} (24 ঘণ্টা লাগবে)") {
+                    verifyPin {
+                        requestWeakening("remove_category:${cat.id}", "ক্যাটাগরি ফিল্টার তোলা: ${cat.labelBn}")
+                    }
+                })
+            } else {
+                siteCard.addView(Ui.secondaryButton(this, "চালু করো: ${cat.labelBn} (${cat.domains.size}টি সাইট)") {
+                    Store.saveSiteCategories(this, Store.siteCategories(this) + cat.id)
+                    Store.logTamper(this, "Site category filter enabled: ${cat.id}")
+                    toast("চালু হয়েছে: ${cat.labelBn}")
+                    buildUi()
+                })
+            }
+        }
         siteCard.addView(Ui.secondaryButton(this, "সাইট যোগ করো") { addSiteFlow() })
         content.addView(siteCard)
     }
@@ -569,6 +589,34 @@ class MainActivity : AppCompatActivity() {
             toast("কপি হয়েছে")
         })
         content.addView(securityCard)
+
+        // ---- Automation API (v1.6.0, PhoneLink) ----
+        val autoCard = Ui.card(this)
+        autoCard.addView(Ui.cardTitle(this, "অটোমেশন (PhoneLink)"))
+        val autoOn = Store.automationTokenHash(this).isNotBlank()
+        autoCard.addView(Ui.secondary(this,
+            if (autoOn) "API চালু আছে — token মিললেই PhoneLink কমান্ড পাঠাতে পারবে।"
+            else "API বন্ধ আছে — token বসালে তবেই চালু হবে।"))
+        autoCard.addView(Ui.secondary(this,
+            "কমান্ড (explicit broadcast, action: com.focuslock.app.AUTOMATION): " +
+                "cmd=block_app (app, mins) · cmd=lock_full (mins) · cmd=focus (preset, mins ঐচ্ছিক) · " +
+                "cmd=unblock (app থাকলে শুধু ওই অ্যাপের টাইম-ব্লক; না থাকলে অটোমেশনের সব ব্লক ও অটোমেশন-সেশন)। " +
+                "unblock শুধু অটোমেশনের শুরু করা জিনিসই তুলতে পারে — হাতে শুরু করা ফোকাস, শিডিউল আর দৈনিক লিমিট কখনোই না। " +
+                "Token শুধু hash আকারে থাকে, ব্যাকআপেও যায় না — আনইনস্টল করলে আবার বসাতে হবে।"))
+        autoCard.addView(Ui.secondaryButton(this, "Token বসাও / বদলাও (PIN লাগবে)") {
+            verifyPin { setAutomationTokenFlow() }
+        })
+        if (autoOn) {
+            autoCard.addView(Ui.secondaryButton(this, "Token সরাও — API বন্ধ করো (PIN লাগবে)") {
+                verifyPin {
+                    Store.setAutomationTokenHash(this, "")
+                    Store.logTamper(this, "Automation token removed — API off")
+                    toast("Automation API বন্ধ হয়েছে")
+                    buildUi()
+                }
+            })
+        }
+        content.addView(autoCard)
 
         // ---- Settings backup / restore (v1.4) ----
         val backupCard = Ui.card(this)
@@ -838,6 +886,28 @@ class MainActivity : AppCompatActivity() {
                     Store.setPin(this, pin)
                     Store.logTamper(this, "PIN set/changed")
                     toast("PIN সেট হয়েছে")
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
+    }
+
+    private fun setAutomationTokenFlow() {
+        val input = EditText(this).apply {
+            hint = "কমপক্ষে ১২ অক্ষরের এলোমেলো কোড"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        AlertDialog.Builder(this).setTitle("Automation Token").setView(input)
+            .setMessage("এই কোডটাই PhoneLink-এর রুলে বসাবে। কোডটা লম্বা ও এলোমেলো রাখো — ছোট কোড হলে অন্য অ্যাপ অনুমান করে কমান্ড পাঠাতে পারবে। কোড শুধু hash আকারে ফোনে থাকে।")
+            .setPositiveButton("সেট") { _, _ ->
+                val token = input.text.toString().trim()
+                if (token.length < 12) {
+                    toast("কমপক্ষে ১২ অক্ষর লাগবে")
+                } else {
+                    Store.setAutomationTokenHash(this, AutomationReceiver.sha256(token))
+                    Store.logTamper(this, "Automation token set/changed")
+                    toast("Token সেট হয়েছে — API চালু")
+                    buildUi()
                 }
             }
             .setNegativeButton("বাতিল", null).show()
