@@ -189,9 +189,9 @@ object Engine {
         if (state is BlockState.AppBlocked) return
         val fg = Store.lastForegroundPkg ?: return
         if (fg == ctx.packageName || fg in warnedPkgsToday) return
-        val limit = Store.appLimits(ctx).firstOrNull { it.pkg == fg } ?: return
+        val limitMin = Blocker.effectiveLimitMinutes(ctx, fg) ?: return
         val usedMin = Blocker.usageTodayMs(ctx, fg) / 60000
-        val remaining = limit.limitMinutes - usedMin
+        val remaining = limitMin - usedMin
         if (remaining in 1..5) {
             warnedPkgsToday += fg
             val label = try {
