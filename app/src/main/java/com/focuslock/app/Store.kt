@@ -154,7 +154,12 @@ object Store {
         if (System.currentTimeMillis() < at) return
         when {
             action == "protection_off" -> setProtectionOn(ctx, false)
-            action == "remove_device_owner" -> AdminHelper.safelyRemoveDeviceOwner(ctx)
+            action == "remove_device_owner" -> {
+                // v1.5.1: verified teardown — if it aborts, owner stays and
+                // the failure is surfaced in Settings with a retry button.
+                val ok = AdminHelper.safelyRemoveDeviceOwner(ctx)
+                setExitFailed(ctx, !ok)
+            }
             action.startsWith("delete_schedule:") -> {
                 val id = action.removePrefix("delete_schedule:").toLongOrNull() ?: return
                 saveSchedules(ctx, schedules(ctx).filter { it.id != id })
@@ -167,6 +172,9 @@ object Store {
                         if (it.pkg == parts[0]) it.copy(limitMinutes = mins) else it
                     }
                     saveAppLimits(ctx, list)
+                    // v1.5.1: if the app is suspended but now under its new
+                    // limit, lift the suspension together with the raise.
+                    AdminHelper.refreshSuspensions(ctx)
                 }
             }
             action.startsWith("remove_site:") -> {
@@ -176,6 +184,11 @@ object Store {
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
+                // v1.5.1: never orphan a suspension — when a limit goes,
+                // a currently-suspended app is restored with it (the audit
+                // Tamim brought caught this: the old code just deleted the
+                // limit and left the app suspended forever).
+                AdminHelper.suspendApp(ctx, pkg, false)
             }
         }
         logTamper(ctx, "Pending change applied after 24h: $action")
@@ -347,6 +360,21 @@ object Store {
             .putInt("appblock_limit", limitMinutes)
             .apply()
     }
+
+    // ---- v1.5.1: managed-package ledger + exit state ----
+    // Every package FocusLock has suspended as Device Owner and not yet
+    // verifiably restored. The emergency exit restores from THIS list (plus
+    // current limits), so deleting a limit can never orphan a suspension.
+    fun ledgerPackages(ctx: Context): Set<String> = getPkgSet(ctx, "managed_ledger")
+    fun ledgerAdd(ctx: Context, pkg: String) =
+        putPkgSet(ctx, "managed_ledger", ledgerPackages(ctx) + pkg)
+    fun ledgerRemove(ctx: Context, pkg: String) =
+        putPkgSet(ctx, "managed_ledger", ledgerPackages(ctx) - pkg)
+
+    /** True when a Device Owner removal was attempted but aborted mid-cleanup. */
+    fun setExitFailed(ctx: Context, failed: Boolean) =
+        prefs(ctx).edit().putBoolean("exit_failed", failed).apply()
+    fun isExitFailed(ctx: Context): Boolean = prefs(ctx).getBoolean("exit_failed", false)
 
     /** The latched (pkg, limit) — valid only today, and only while that app's limit is unchanged. */
     fun appBlockLatch(ctx: Context): Pair<String, Int>? {
