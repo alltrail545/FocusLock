@@ -57,7 +57,11 @@ object AdminHelper {
             dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_SAFE_BOOT)
             dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_FACTORY_RESET)
             dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_CONFIG_DATE_TIME)
-            dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_DEBUGGING_FEATURES)
+            // NOTE (Tamim's call, v1.5.2): DISALLOW_DEBUGGING_FEATURES is
+            // deliberately NOT set. Tamim runs Shizuku + Termux + Phone Link
+            // on debugging access, and activation itself is done from Termux.
+            // The in-app exit (PIN + 24h) never needed ADB, so debugging
+            // stays available for his own tooling.
             dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_ADD_USER)
             // Apps allowed on the lock screen (kiosk): us + dialer + clock.
             applyLockTaskPackages(ctx)
