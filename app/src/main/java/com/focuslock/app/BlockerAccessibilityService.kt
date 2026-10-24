@@ -110,13 +110,19 @@ class BlockerAccessibilityService : AccessibilityService() {
     // omnibox / location, or an address-field holding a domain-like text.
     private fun checkBlockedSite(browserPkg: String) {
         val sites = Store.blockedSites(this)
-        if (sites.isEmpty()) return
+        // v1.6.0: enabled category filters contribute their domains too —
+        // matched by host so lookalike domains cannot slip through (or
+        // innocent ones get caught) by substring accidents.
+        val catDomains = SiteCategories.domainsFor(Store.siteCategories(this))
+        if (sites.isEmpty() && catDomains.isEmpty()) return
         val now = System.currentTimeMillis()
         if (now - lastSiteCheckMs < 400) return
         lastSiteCheckMs = now
         val root = rootInActiveWindow ?: return
         val url = extractUrl(root) ?: return
-        val hit = sites.firstOrNull { url.contains(it) } ?: return
+        val hit = sites.firstOrNull { url.contains(it) }
+            ?: catDomains.firstOrNull { SiteCategories.hostMatches(url, it) }
+            ?: return
         Store.siteBlockHost = hit
         Store.siteBlockPkg = browserPkg
         Store.siteBlockUntilMs = now + 3000
