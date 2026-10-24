@@ -79,17 +79,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // v1.5 belt-and-braces: if Device Owner was removed (emergency exit)
-        // while a LockTask pin was somehow still held, release it here so
-        // the phone can never be stranded in kiosk mode without an owner.
-        if (!AdminHelper.isDeviceOwner(this)) {
-            try {
-                val am = getSystemService(android.app.ActivityManager::class.java)
-                if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
-                    stopLockTask()
-                }
-            } catch (_: Exception) { }
-        }
+        // v1.5.1 belt-and-braces: release a stranded LockTask pin whenever
+        // NO block is active — whether Device Owner is still in place or
+        // was removed by the emergency exit. The phone must never stay in
+        // kiosk mode with nothing left to justify the pin.
+        try {
+            val am = getSystemService(android.app.ActivityManager::class.java)
+            if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE &&
+                Blocker.currentBlock(this) == BlockState.None
+            ) {
+                stopLockTask()
+            }
+        } catch (_: Exception) { }
         buildUi() // refresh status + lists
     }
 
@@ -549,6 +550,18 @@ class MainActivity : AppCompatActivity() {
             securityCard.addView(Ui.secondary(this,
                 "জরুরি বের-হওয়ার পথ: Owner সরালে আগে সব restriction উঠবে, suspend/hide করা অ্যাপ ফিরবে, তারপর Owner যাবে — কোনো অ্যাপ আটকে থাকবে না।"))
         }
+        if (Store.isExitFailed(this)) {
+            securityCard.addView(Ui.secondary(this,
+                "⚠️ Device Owner সরানো অসম্পূর্ণ থেকে গেছে — কোনো restriction বা অ্যাপ এখনো আটকে থাকায় Owner সরানো হয়নি (ইচ্ছা করেই: আটকে রেখে Owner সরলে বিপদ)। নিচে আবার চেষ্টা করো।"))
+            securityCard.addView(Ui.secondaryButton(this, "Owner সরানো আবার চেষ্টা করো (PIN লাগবে)") {
+                verifyPin {
+                    val ok = AdminHelper.safelyRemoveDeviceOwner(this@MainActivity)
+                    Store.setExitFailed(this@MainActivity, !ok)
+                    toast(if (ok) "Device Owner সরে গেছে" else "আবারো অসম্পূর্ণ — ট্যাম্পার লগে কারণ আছে")
+                    buildUi()
+                }
+            })
+        }
         securityCard.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Stage B-এর জন্য)") {
             val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -775,7 +788,9 @@ class MainActivity : AppCompatActivity() {
     } catch (e: Exception) { pkg }
 
     private fun addLimitFlow() {
-        val apps = launcherApps()
+        // v1.5.1: protected packages (Settings, launcher, dialer, system)
+        // are not offered — suspending one could strand the phone.
+        val apps = launcherApps().filter { !AdminHelper.isProtectedPackage(this, it) }
         AlertDialog.Builder(this).setTitle("কোন অ্যাপে লিমিট?")
             .setItems(apps.map { appLabel(it) }.toTypedArray()) { _, which ->
                 val pkg = apps[which]
