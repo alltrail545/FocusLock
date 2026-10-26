@@ -465,7 +465,72 @@ class MainActivity : AppCompatActivity() {
             }
         }
         siteCard.addView(Ui.secondaryButton(this, "সাইট যোগ করো") { addSiteFlow() })
+
+        // ---- Allow list (v1.7.0, Tamim's request) ----
+        siteCard.addView(Ui.label(this, "Allow তালিকা — এই সাইটগুলো কখনো ব্লক হবে না, ব্লক/ক্যাটাগরির উপর দিয়েও চলবে"))
+        val allowSites = Store.siteAllowList(this)
+        if (allowSites.isEmpty()) {
+            siteCard.addView(Ui.secondary(this, "Allow তালিকা খালি।"))
+        }
+        for (site in allowSites) {
+            siteCard.addView(Ui.body(this, site))
+            siteCard.addView(Ui.secondaryButton(this, "তুলে দাও: $site") {
+                Store.saveSiteAllowList(this, Store.siteAllowList(this) - site)
+                Store.logTamper(this, "Site removed from allow list: $site")
+                toast("তুলে দেওয়া হয়েছে: $site")
+                buildUi()
+            })
+        }
+        siteCard.addView(Ui.secondaryButton(this, "Allow সাইট যোগ করো") { addAllowSiteFlow() })
+        if (Store.siteAllowOnly(this)) {
+            siteCard.addView(Ui.body(this, "শুধু Allow তালিকার সাইট চলছে — বাকি সব সাইট ব্লক"))
+            siteCard.addView(Ui.secondaryButton(this, "বন্ধ করো: শুধু-Allow মোড (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("allow_only_off", "শুধু-Allow মোড বন্ধ করা")
+                }
+            })
+        } else {
+            siteCard.addView(Ui.secondaryButton(this, "চালু করো: শুধু Allow তালিকার সাইট চলবে") {
+                val enable = {
+                    Store.setSiteAllowOnly(this, true)
+                    Store.logTamper(this, "Allow-only website mode enabled")
+                    toast("চালু হয়েছে — এখন শুধু Allow তালিকার সাইট খুলবে")
+                    buildUi()
+                }
+                if (Store.siteAllowList(this).isEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Allow তালিকা খালি")
+                        .setMessage("তালিকা খালি থাকলে কোনো ওয়েবসাইটই খুলবে না। তবু চালু করবে?")
+                        .setPositiveButton("হ্যাঁ, চালু করো") { _, _ -> enable() }
+                        .setNegativeButton("না", null).show()
+                } else {
+                    enable()
+                }
+            })
+        }
         content.addView(siteCard)
+    }
+
+    private fun addAllowSiteFlow() {
+        val input = EditText(this).apply {
+            hint = "যেমন: classroom.google.com বা bbc.com"
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        AlertDialog.Builder(this).setTitle("Allow তালিকায় সাইট").setView(input)
+            .setPositiveButton("যোগ করো") { _, _ ->
+                var host = input.text.toString().trim().lowercase()
+                    .removePrefix("https://").removePrefix("http://").removePrefix("www.")
+                host = host.substringBefore("/").substringBefore("?")
+                if (host.isBlank() || !host.contains(".")) {
+                    toast("ঠিকমতো সাইটের নাম দাও, যেমন bbc.com")
+                } else {
+                    Store.saveSiteAllowList(this, Store.siteAllowList(this) + host)
+                    Store.logTamper(this, "Website allowed: $host")
+                    toast("Allow তালিকায় যোগ হয়েছে: $host")
+                    buildUi()
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
     }
 
     private fun addSiteFlow() {
@@ -775,15 +840,51 @@ class MainActivity : AppCompatActivity() {
             .sortedBy { appLabel(it) }
     }
 
+    /**
+     * v1.7.0 (Tamim's report: "অ্যাপ এর তালিকায় সিস্টেম অ্যাপ দেখায় না"):
+     * the old list came only from LAUNCHER entries, so system apps without
+     * a launcher entry never appeared. The picker now also includes system
+     * apps (label "(সিস্টেম)"), skipping internal plumbing packages that
+     * nobody would ever pick (providers, overlays, the "android" package).
+     */
+    private fun pickerApps(): List<Pair<String, String>> {
+        val pm = packageManager
+        val launcher = launcherApps()
+        val result = launcher.map { it to appLabel(it) }.toMutableList()
+        val seen = launcher.toSet()
+        val extras = try {
+            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                .filter { it.packageName !in seen && it.packageName != packageName }
+                .filter {
+                    (it.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or
+                        android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+                }
+                .filter { it.enabled }
+                .filter {
+                    !it.packageName.startsWith("com.android.providers.") &&
+                        !it.packageName.contains("overlay") &&
+                        it.packageName != "android"
+                }
+                .filter { appLabel(it.packageName).isNotBlank() }
+                .map { it.packageName }
+                .sortedBy { appLabel(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        for (pkg in extras) result.add(pkg to (appLabel(pkg) + " (সিস্টেম)"))
+        return result
+    }
+
     private fun pickAppsMulti(title: String, preselected: Set<String>, cb: (Set<String>) -> Unit) {
-        val apps = launcherApps()
-        val checked = BooleanArray(apps.size) { i -> apps[i] in preselected }
+        val apps = pickerApps()
+        val pkgs = apps.map { it.first }
+        val checked = BooleanArray(apps.size) { i -> pkgs[i] in preselected }
         AlertDialog.Builder(this).setTitle(title)
-            .setMultiChoiceItems(apps.map { appLabel(it) }.toTypedArray(), checked) { _, i, isChecked ->
+            .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, isChecked ->
                 checked[i] = isChecked
             }
             .setPositiveButton("ঠিক আছে") { _, _ ->
-                cb(apps.filterIndexed { i, _ -> checked[i] }.toSet())
+                cb(pkgs.filterIndexed { i, _ -> checked[i] }.toSet())
             }
             .setNegativeButton("বাতিল", null).show()
     }
@@ -840,12 +941,13 @@ class MainActivity : AppCompatActivity() {
     private fun addLimitFlow() {
         // v1.5.1: protected packages (Settings, launcher, dialer, system)
         // are not offered — suspending one could strand the phone.
-        val apps = launcherApps().filter { !AdminHelper.isProtectedPackage(this, it) }
+        // v1.7.0: pickerApps() also lists system apps (marked সিস্টেম).
+        val apps = pickerApps().filter { !AdminHelper.isProtectedPackage(this, it.first) }
         AlertDialog.Builder(this).setTitle("কোন অ্যাপে লিমিট?")
-            .setItems(apps.map { appLabel(it) }.toTypedArray()) { _, which ->
-                val pkg = apps[which]
+            .setItems(apps.map { it.second }.toTypedArray()) { _, which ->
+                val pkg = apps[which].first
                 val input = EditText(this).apply { hint = "দিনে কত মিনিট? যেমন: 30"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
-                AlertDialog.Builder(this).setTitle("${appLabel(pkg)} — লিমিট").setView(input)
+                AlertDialog.Builder(this).setTitle("${apps[which].second} — লিমিট").setView(input)
                     .setPositiveButton("বসাও") { _, _ ->
                         val mins = input.text.toString().toIntOrNull()
                         if (mins == null || mins <= 0) {
