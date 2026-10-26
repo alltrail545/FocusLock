@@ -114,15 +114,27 @@ class BlockerAccessibilityService : AccessibilityService() {
         // matched by host so lookalike domains cannot slip through (or
         // innocent ones get caught) by substring accidents.
         val catDomains = SiteCategories.domainsFor(Store.siteCategories(this))
-        if (sites.isEmpty() && catDomains.isEmpty()) return
+        // v1.7.0: the allow list and allow-only mode (Tamim's request).
+        val allowList = Store.siteAllowList(this)
+        val allowOnly = Store.siteAllowOnly(this)
+        if (sites.isEmpty() && catDomains.isEmpty() && !allowOnly) return
         val now = System.currentTimeMillis()
         if (now - lastSiteCheckMs < 400) return
         lastSiteCheckMs = now
         val root = rootInActiveWindow ?: return
         val url = extractUrl(root) ?: return
-        val hit = sites.firstOrNull { url.contains(it) }
-            ?: catDomains.firstOrNull { SiteCategories.hostMatches(url, it) }
-            ?: return
+        // An allow-listed site is NEVER blocked — it overrides the block
+        // list and every category filter.
+        if (allowList.any { SiteCategories.hostMatches(url, it) }) return
+        val hit: String = if (allowOnly) {
+            // Allow-only: anything not on the allow list is blocked
+            // (empty allow list = no website opens at all).
+            SiteCategories.hostOf(url).ifBlank { return }
+        } else {
+            sites.firstOrNull { url.contains(it) }
+                ?: catDomains.firstOrNull { SiteCategories.hostMatches(url, it) }
+                ?: return
+        }
         Store.siteBlockHost = hit
         Store.siteBlockPkg = browserPkg
         Store.siteBlockUntilMs = now + 3000
