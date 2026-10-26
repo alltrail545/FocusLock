@@ -72,11 +72,16 @@ object SiteCategories {
      * subdomain of it. Safer than a raw substring test (which would let
      * "x.com" match "box.com").
      */
-    fun hostMatches(urlText: String, domain: String): Boolean {
+    /** The bare host of a URL-bar text ("https://m.facebook.com/x" -> "m.facebook.com"). */
+    fun hostOf(urlText: String): String {
         var host = urlText.trim().lowercase()
             .removePrefix("https://").removePrefix("http://")
-        host = host.substringBefore("/").substringBefore("?").substringBefore("#")
+        return host.substringBefore("/").substringBefore("?").substringBefore("#")
             .substringBefore(":").trim()
+    }
+
+    fun hostMatches(urlText: String, domain: String): Boolean {
+        val host = hostOf(urlText)
         if (host.isBlank()) return false
         return host == domain || host.endsWith(".$domain")
     }
