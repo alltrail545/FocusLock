@@ -185,6 +185,7 @@ object Store {
                 val id = action.removePrefix("remove_category:")
                 saveSiteCategories(ctx, siteCategories(ctx) - id)
             }
+            action == "allow_only_off" -> setSiteAllowOnly(ctx, false)
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -264,6 +265,25 @@ object Store {
     fun saveSiteCategories(ctx: Context, ids: Set<String>) =
         prefs(ctx).edit().putString("site_categories", ids.joinToString(";")).apply()
 
+    // ---- website allow list (v1.7.0, Tamim's request) ----
+    /** Sites that are NEVER blocked: they override the block list and the
+     *  category filters. Stored like blockedSites (";"-joined hosts). */
+    fun siteAllowList(ctx: Context): List<String> =
+        (prefs(ctx).getString("site_allow_list", "") ?: "")
+            .split(";").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+
+    fun saveSiteAllowList(ctx: Context, list: List<String>) =
+        prefs(ctx).edit().putString("site_allow_list",
+            list.map { it.trim().lowercase() }.filter { it.isNotBlank() }.distinct().joinToString(";")).apply()
+
+    /** Allow-only mode: ONLY allow-list sites may open; every other site is
+     *  blocked. An empty allow list + this mode = no website opens at all.
+     *  Turning it ON is immediate; turning it OFF is weakening (PIN + 24h
+     *  via the "allow_only_off" pending action). */
+    fun siteAllowOnly(ctx: Context): Boolean = prefs(ctx).getBoolean("site_allow_only", false)
+    fun setSiteAllowOnly(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("site_allow_only", on).apply()
+
 
     /** Transient: a blocked site is being shown the lock screen until this time. */
     @Volatile var siteBlockUntilMs: Long = 0L
@@ -325,6 +345,8 @@ object Store {
         o.put("focus_presets", org.json.JSONArray(focusPresets(ctx).map { it.serialize() }))
         o.put("blocked_sites", org.json.JSONArray(blockedSites(ctx)))
         o.put("site_categories", org.json.JSONArray(siteCategories(ctx).toList()))
+        o.put("site_allow_list", org.json.JSONArray(siteAllowList(ctx)))
+        o.put("site_allow_only", siteAllowOnly(ctx))
         return o.toString(2)
     }
 
@@ -357,6 +379,11 @@ object Store {
                 val arr = o.getJSONArray("site_categories")
                 saveSiteCategories(ctx, (0 until arr.length()).map { arr.getString(it) }.toSet())
             }
+            if (o.has("site_allow_list")) {
+                val arr = o.getJSONArray("site_allow_list")
+                saveSiteAllowList(ctx, (0 until arr.length()).map { arr.getString(it) })
+            }
+            if (o.has("site_allow_only")) setSiteAllowOnly(ctx, o.getBoolean("site_allow_only"))
             logTamper(ctx, "Settings restored from backup file")
             true
         } catch (e: Exception) {
