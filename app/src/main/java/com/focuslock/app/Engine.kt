@@ -44,9 +44,6 @@ object Engine {
     private var dndApplied = false
     private var dndPreviousFilter = NotificationManager.INTERRUPTION_FILTER_ALL
 
-    // ---- focus report recording ----
-    private var focusEndSeen = 0L
-
     // ---- limit-warning state ----
     private val warnedPkgsToday = mutableSetOf<String>()
     private var warnDay = -1
@@ -57,8 +54,11 @@ object Engine {
         val app = ctx.applicationContext
         try {
             enforce(app)
-        } catch (e: Exception) {
-            Store.logTamper(app, "engine tick failed: ${e.message}")
+        } catch (e: Throwable) {
+            // v1.8.0 audit: was Exception-only — an Error escaping enforce()
+            // would propagate into the callers' handler runnables and could
+            // stop their re-post loop, killing enforcement silently.
+            try { Store.logTamper(app, "engine tick failed: ${e.message}") } catch (_: Throwable) { }
         }
     }
 
@@ -67,7 +67,10 @@ object Engine {
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.
-        val today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+        // v1.8.0 audit: the key is year-aware — plain DAY_OF_YEAR repeats
+        // every year, so a Jan-1 rollover could be mistaken for "same day".
+        val calNow = Calendar.getInstance()
+        val today = calNow.get(Calendar.YEAR) * 1000 + calNow.get(Calendar.DAY_OF_YEAR)
         if (today != lastSuspendDay) {
             lastSuspendDay = today
             AdminHelper.refreshSuspensions(ctx)
@@ -151,13 +154,19 @@ object Engine {
         val end = Store.focusEndMs(ctx)
         val now = System.currentTimeMillis()
         if (end > now) {
-            focusEndSeen = end
-        } else if (end > 0 && focusEndSeen == end) {
+            // Session still running — nothing to record yet.
+        } else if (end > 0) {
+            // v1.8.0 audit: the old code recorded only when THIS process had
+            // seen the session running (focusEndSeen == end). If the process
+            // died and restarted after the session had already ended, the
+            // minutes were never recorded and the stale end/start values
+            // stayed in the store forever. The stored start/end pair is
+            // enough to record exactly once: recording clears both, so a
+            // restart can never double-count.
             val start = Store.focusStartMs(ctx)
             if (start > 0 && start < end) {
                 Store.recordFocusMinutes(ctx, ((end - start) / 60000).toInt())
             }
-            focusEndSeen = 0L
             Store.setFocusEndMs(ctx, 0L)
             Store.setFocusStartMs(ctx, 0L)
         }
@@ -168,17 +177,28 @@ object Engine {
     private fun updateDnd(ctx: Context, hardLock: Boolean) {
         try {
             val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+            // v1.8.0 audit: adopt a persisted restore state left by a dead
+            // process, so a mid-lock kill can no longer strand the phone on
+            // the alarms-only filter after the lock ends.
+            if (!dndApplied) {
+                Store.dndPreviousFilter(ctx)?.let {
+                    dndApplied = true
+                    dndPreviousFilter = it
+                }
+            }
             if (hardLock && Store.silenceDuringLock(ctx)) {
                 if (!dndApplied && nm.isNotificationPolicyAccessGranted) {
                     dndPreviousFilter = nm.currentInterruptionFilter
                     nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS)
                     dndApplied = true
+                    Store.setDndPreviousFilter(ctx, dndPreviousFilter)
                 }
             } else if (dndApplied) {
                 if (nm.isNotificationPolicyAccessGranted) {
                     nm.setInterruptionFilter(dndPreviousFilter)
                 }
                 dndApplied = false
+                Store.setDndPreviousFilter(ctx, null)
             }
         } catch (_: Exception) { }
     }
