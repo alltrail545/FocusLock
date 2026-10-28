@@ -459,7 +459,10 @@ object AdminHelper {
             if (want) {
                 dpm.setKeyguardDisabledFeatures(
                     admin,
-                    DevicePolicyManager.KEYGUARD_DISABLE_CAMERA or
+                    // v1.12.1 compile fix: there is NO KEYGUARD_DISABLE_CAMERA
+                    // constant — the real one for the secure keyguard is
+                    // KEYGUARD_DISABLE_SECURE_CAMERA.
+                    DevicePolicyManager.KEYGUARD_DISABLE_SECURE_CAMERA or
                         DevicePolicyManager.KEYGUARD_DISABLE_WIDGETS_ALL or
                         DevicePolicyManager.KEYGUARD_DISABLE_UNREDACTED_NOTIFICATIONS
                 )
@@ -729,7 +732,8 @@ object AdminHelper {
         android.app.admin.SecurityLog.TAG_ADB_SHELL_CMD -> "ADB কমান্ড চালানো হয়েছে"
         android.app.admin.SecurityLog.TAG_APP_PROCESS_START -> "অ্যাপ প্রসেস শুরু"
         android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISSED -> "লক স্ক্রিন খোলা হয়েছে"
-        android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISS_ATTEMPT -> "লক স্ক্রিন খোলার চেষ্টা"
+        // v1.12.1 compile fix: TAG_KEYGUARD_DISMISS_ATTEMPT does not exist
+        // in SecurityLog — the auth-attempt tag below covers it.
         android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISS_AUTH_ATTEMPT -> "লক স্ক্রিনে প্রমাণীকরণের চেষ্টা"
         android.app.admin.SecurityLog.TAG_KEYGUARD_SECURED -> "লক স্ক্রিন সুরক্ষিত (ব্যর্থ চেষ্টা)"
         android.app.admin.SecurityLog.TAG_OS_STARTUP -> "ফোন চালু হয়েছে"
@@ -801,9 +805,12 @@ object AdminHelper {
                 try {
                     when (ev) {
                         is android.app.admin.NetworkEvent.DnsEvent ->
-                            if (ev.hostname.isNotBlank()) hosts += ev.hostname
+                            // v1.12.1 compile fix: explicit Java getters.
+                            if (ev.getHostname().isNotBlank()) hosts += ev.getHostname()
                         is android.app.admin.NetworkEvent.ConnectEvent ->
-                            ev.address?.hostAddress?.let { hosts += it }
+                            // v1.12.1 compile fix: ConnectEvent has no
+                            // "address" property — its getter is getInetAddress().
+                            ev.getInetAddress()?.hostAddress?.let { hosts += it }
                         else -> { }
                     }
                 } catch (_: Throwable) { }
