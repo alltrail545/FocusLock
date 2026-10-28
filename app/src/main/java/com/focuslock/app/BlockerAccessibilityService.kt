@@ -29,7 +29,13 @@ class BlockerAccessibilityService : AccessibilityService() {
     private val watchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val watchdog = object : Runnable {
         override fun run() {
-            Engine.tick(this@BlockerAccessibilityService)
+            // v1.8.0 audit: re-post in finally — if tick ever threw past
+            // Engine's own guard, the old code never re-posted and the 1s
+            // idle watchdog (the ONLY idle enforcement) died silently
+            // until the service happened to restart.
+            try {
+                Engine.tick(this@BlockerAccessibilityService)
+            } catch (_: Throwable) { }
             watchdogHandler.postDelayed(this, 1000)
         }
     }
@@ -46,6 +52,17 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // v1.8.0 audit: the whole event path runs unguarded — one exception
+        // (a malformed event, a PackageManager hiccup in browsers()) could
+        // crash the process and take enforcement down with it. Events are
+        // frequent and self-healing, so a dropped event is always safer
+        // than a dead service.
+        try {
+            onAccessibilityEventGuarded(event)
+        } catch (_: Throwable) { }
+    }
+
+    private fun onAccessibilityEventGuarded(event: AccessibilityEvent?) {
         val type = event?.eventType ?: return
         val pkg = event.packageName?.toString() ?: return
 
