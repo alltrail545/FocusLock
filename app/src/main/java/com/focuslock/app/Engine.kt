@@ -24,7 +24,8 @@ import java.util.Calendar
  *    is off (the lock activity already sits over the keyguard via
  *    showWhenLocked, so nothing needs launching — launching with
  *    turnScreenOn is exactly what caused the on/off flicker), when the
- *    dialer/clock is in front, or more often than once per 1.5 s.
+ *    dialer/clock is in front, or more often than once per 350 ms
+ *    (v1.14.0: was 1.5 s — see ensureLockShown).
  *  - SINGLE_TOP flag (not CLEAR_TOP): re-delivering an intent to the
  *    running lock activity no longer recreates it.
  *
@@ -39,6 +40,9 @@ object Engine {
 
     // ---- stability ----
     @Volatile private var lastLockLaunchMs = 0L
+
+    // ---- v1.14.0: settings-sync maintenance cadence (see enforce()) ----
+    @Volatile private var lastMaintenanceMs = 0L
 
     // ---- DND state ----
     private var dndApplied = false
@@ -64,35 +68,38 @@ object Engine {
 
     private fun enforce(ctx: Context) {
         Store.applyPendingIfDue(ctx)
-        // v1.9.0: keep Chrome's Device Owner managed config in step with
-        // the site lists. Runs right after the 24h-pending application, so
-        // a weakening change that just landed re-syncs in the same tick;
-        // the signature guard inside makes this a no-op when nothing
-        // changed, and it is a silent no-op without Device Owner.
-        AdminHelper.syncBrowserRestrictions(ctx)
-        // v1.10.0: install block + per-app uninstall protections follow
-        // the saved state the same way — a pending change that just
-        // applied above takes DPM effect in this same tick. The
-        // applied-state guards inside AdminHelper mean unchanged state
-        // costs no DPM calls, and without Device Owner it is a no-op.
-        AdminHelper.applyInstallControls(ctx)
-        // v1.11.0: filtered Private DNS follows the saved flag the same
-        // way (a dns_filter_off pending that just landed above resets DNS
-        // in this same tick). Applied-marker guard inside: unchanged
-        // state costs no DPM calls; no-op without Device Owner.
-        AdminHelper.applyDnsFilter(ctx)
-        // v1.12.0: the all-in-one batch follows the saved state the same
-        // way — keyguard/password hardening, the account-modify block,
-        // hidden apps, permission locks, the FRP policy, and owner
-        // logging. A pending change that just landed above takes DPM
-        // effect in this same tick; every apply is marker-guarded
-        // (unchanged state = zero DPM calls) and owner-gated.
-        AdminHelper.applyKeyguardHardening(ctx)
-        AdminHelper.applyAccountBlock(ctx)
-        AdminHelper.applyHiddenApps(ctx)
-        AdminHelper.applyPermissionLocks(ctx)
-        AdminHelper.applyFrpPolicy(ctx)
-        AdminHelper.applyOwnerLogging(ctx)
+        // v1.14.0 (Tamim's report: blocked apps stayed usable for 2–4 s):
+        // the Device Owner settings-syncs below used to run on EVERY 1 s
+        // tick. They are marker-guarded, but each still costs prefs reads
+        // and DevicePolicyManager binder calls on the process's main
+        // thread — the same thread that must answer accessibility events
+        // and draw the lock screen. A heavy tick queued the lock launch
+        // behind it. These syncs only mirror saved state into DPM, so a
+        // 10 s cadence loses nothing (a pending change that just landed
+        // above takes DPM effect within 10 s); enforcement itself — the
+        // block decision and the lock launch — still runs every tick.
+        val nowForMaintenance = System.currentTimeMillis()
+        val doMaintenance = nowForMaintenance - lastMaintenanceMs >= 10_000
+        if (doMaintenance) {
+            lastMaintenanceMs = nowForMaintenance
+            // v1.9.0: keep Chrome's Device Owner managed config in step
+            // with the site lists (signature-guarded; silent no-op
+            // without Device Owner).
+            AdminHelper.syncBrowserRestrictions(ctx)
+            // v1.10.0: install block + per-app uninstall protections.
+            AdminHelper.applyInstallControls(ctx)
+            // v1.11.0: filtered Private DNS follows the saved flag.
+            AdminHelper.applyDnsFilter(ctx)
+            // v1.12.0: keyguard/password hardening, the account-modify
+            // block, hidden apps, permission locks, the FRP policy, and
+            // owner logging — all marker-guarded and owner-gated.
+            AdminHelper.applyKeyguardHardening(ctx)
+            AdminHelper.applyAccountBlock(ctx)
+            AdminHelper.applyHiddenApps(ctx)
+            AdminHelper.applyPermissionLocks(ctx)
+            AdminHelper.applyFrpPolicy(ctx)
+            AdminHelper.applyOwnerLogging(ctx)
+        }
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.
@@ -155,7 +162,10 @@ object Engine {
             }
         }
 
-        maybeWarnLimitApproaching(ctx, state)
+        // v1.14.0: the warning check reads UsageStats (expensive) — it
+        // rides the maintenance cadence; a warning banner that lands a
+        // few seconds later changes nothing, a delayed lock does.
+        if (doMaintenance) maybeWarnLimitApproaching(ctx, state)
 
         // Silent-engine rule: the foreground service exists ONLY during a block.
         if (state == BlockState.None) BlockingService.stop(ctx) else BlockingService.start(ctx)
@@ -165,7 +175,7 @@ object Engine {
      * The ONLY way anything may bring the lock screen forward.
      * Every guard here exists to kill the flicker Tamim reported:
      * no launch if the lock is already up, none while the screen is off,
-     * none over the dialer/clock, and never twice within 1.5 s.
+     * none over the dialer/clock, and never twice within 350 ms.
      */
     fun ensureLockShown(ctx: Context) {
         if (LockActivity.isShowing) return
@@ -174,7 +184,14 @@ object Engine {
         val fg = Store.lastForegroundPkg
         if (fg != null && fg != ctx.packageName && fg in Blocker.alwaysAllowed(ctx)) return
         val now = System.currentTimeMillis()
-        if (now - lastLockLaunchMs < 1500) return
+        // v1.14.0 (Tamim's report: a blocked app stayed usable 2–4 s):
+        // this freeze used to be 1500 ms, so one missed launch plus the
+        // 1 s tick cost up to ~2.5 s of open access. 350 ms is purely a
+        // launch-in-flight guard now — isShowing (set in LockActivity's
+        // onResume) and the singleTask/SINGLE_TOP launch mode already
+        // prevent launch storms and flicker, so the long freeze bought
+        // nothing but delay.
+        if (now - lastLockLaunchMs < 350) return
         lastLockLaunchMs = now
         try {
             ctx.startActivity(

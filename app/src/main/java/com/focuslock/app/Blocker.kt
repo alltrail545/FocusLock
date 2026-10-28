@@ -23,8 +23,28 @@ sealed class BlockState {
 /** Pure decision engine: given the clock + stored rules + today's usage, should we block? */
 object Blocker {
 
+    // v1.14.0: alwaysAllowed() resolves the dialer/clock packages through
+    // PackageManager binder calls, and it sits on the hot path (every
+    // accessibility event, every engine tick, every lock-screen tick).
+    // Uncached, those round-trips added up exactly when the phone was
+    // busiest — app launches — and delayed the lock. The default dialer
+    // and clock do not change minute to minute, so the resolved set is
+    // cached for 60 s.
+    @Volatile private var alwaysAllowedCache: Set<String>? = null
+    @Volatile private var alwaysAllowedCacheAt = 0L
+
     /** Packages that always work, even in a full lock: calls and alarms are safety, not entertainment. */
     fun alwaysAllowed(ctx: Context): Set<String> {
+        val nowMs = System.currentTimeMillis()
+        val cached = alwaysAllowedCache
+        if (cached != null && nowMs - alwaysAllowedCacheAt < 60_000) return cached
+        val fresh = computeAlwaysAllowed(ctx)
+        alwaysAllowedCache = fresh
+        alwaysAllowedCacheAt = nowMs
+        return fresh
+    }
+
+    private fun computeAlwaysAllowed(ctx: Context): Set<String> {
         val set = mutableSetOf(ctx.packageName)
         // v1.10.0 bug fix (Tamim's report: dialer/clock would not open during
         // focus): this list used to be ONLY the hardcoded names below, while

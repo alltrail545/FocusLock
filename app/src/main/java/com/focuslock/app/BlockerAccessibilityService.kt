@@ -66,6 +66,14 @@ class BlockerAccessibilityService : AccessibilityService() {
         val type = event?.eventType ?: return
         val pkg = event.packageName?.toString() ?: return
 
+        // v1.14.0 reorder (Tamim's report: blocked apps stayed usable for
+        // 2–4 s): a window-state change is handled FIRST and the browser
+        // URL-tree scan runs LAST — the scan walks the whole node tree and
+        // used to sit between the app-open event and the lock launch.
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            handleForegroundChange(pkg)
+        }
+
         // v1.4 website blocking: watch ANY browser's URL bar (Tamim's
         // phone has several browsers). The browser set is resolved from
         // the system (every app that can open web links) + a known list.
@@ -75,8 +83,10 @@ class BlockerAccessibilityService : AccessibilityService() {
         ) {
             checkBlockedSite(pkg)
         }
-        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+    }
 
+    /** A new app/window came to the front: record it, and slam the lock if it is blocked. */
+    private fun handleForegroundChange(pkg: String) {
         if (pkg == "com.android.systemui") {
             val state = Blocker.currentBlock(this)
             if (state is BlockState.Full || state is BlockState.FocusSession) {
@@ -95,6 +105,25 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (pkg == packageName) return
         Store.lastForegroundPkg = pkg
         if (pkg in Blocker.alwaysAllowed(this)) return
+
+        // v1.14.0 fast path: a focus session or a scheduled full lock is
+        // decidable from prefs + the calendar alone — no UsageStats read,
+        // no full currentBlock() chain — so the lock launches inside this
+        // same event instead of after the expensive checks. currentBlock()
+        // gives these two states top priority anyway, so deciding them
+        // here changes nothing except speed. Everything else (app limits,
+        // timed blocks, the site latch) still goes through currentBlock().
+        val nowMs = System.currentTimeMillis()
+        if (Store.focusEndMs(this) > nowMs) {
+            if (!Blocker.isAllowedInFocus(this, pkg, Store.focusSessionAllowed(this))) {
+                Engine.ensureLockShown(this)
+            }
+            return
+        }
+        if (Blocker.activeSchedule(this) != null) {
+            Engine.ensureLockShown(this)
+            return
+        }
 
         val state = Blocker.currentBlock(this)
         val shouldBlock = when (state) {
