@@ -26,11 +26,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * FocusLock home, on Tamim's design system (2026-10-23):
- * near-black green-tinted background, flat bento cards, emerald accent,
- * no gradients, no emoji in any control or label.
- * v1.2: BOTTOM NAVIGATION BAR with five tabs (Tamim's request):
- * Home / Focus / Schedule / Limits / Settings.
+ * FocusLock home. Design system v2 "Classic Glass" (Tamim's pick,
+ * 2026-10-28): aurora gradient backdrop, translucent glass cards,
+ * floating glass pill nav. Screens stay text-light — explanations
+ * live behind each card's ⓘ button (Ui.cardHeader).
+ * Bottom navigation with five tabs: Home / Focus / Schedule /
+ * Limits / Settings.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -99,7 +100,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi() {
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Ui.BG)
+            background = Ui.aurora(this@MainActivity)
         }
 
         // Header (fixed above the scrolling content)
@@ -109,9 +110,6 @@ class MainActivity : AppCompatActivity() {
                 Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 10))
         }
         header.addView(Ui.appTitle(this, "FocusLock"))
-        header.addView(Ui.label(this, "একদম কড়া স্ক্রিন-টাইম লক").apply {
-            setPadding(0, Ui.dp(this@MainActivity, 2), 0, 0)
-        })
         shell.addView(header)
 
         // Scrolling tab content
@@ -121,7 +119,6 @@ class MainActivity : AppCompatActivity() {
                 Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 16))
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(Ui.BG)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             )
@@ -137,22 +134,29 @@ class MainActivity : AppCompatActivity() {
             else -> tabSettings(content)
         }
 
-        // Hairline + bottom navigation bar
-        shell.addView(android.view.View(this).apply {
-            setBackgroundColor(Ui.STROKE)
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this@MainActivity, 1))
-        })
+        // Floating glass pill navigation (design v2)
         shell.addView(buildNavBar())
         setContentView(shell)
     }
 
     private fun buildNavBar(): LinearLayout {
         val labels = listOf("হোম", "ফোকাস", "শিডিউল", "লিমিট", "সেটিংস")
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 2),
+                Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 14))
+        }
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Ui.CARD)
-            setPadding(Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 10),
-                Ui.dp(this@MainActivity, 8), Ui.dp(this@MainActivity, 12))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                setColor(android.graphics.Color.argb(56, 255, 255, 255))
+                cornerRadius = Ui.dp(this@MainActivity, 999).toFloat()
+                setStroke(Ui.dp(this@MainActivity, 1), Ui.STROKE)
+            }
+            elevation = Ui.dp(this@MainActivity, 8).toFloat()
+            setPadding(Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 6),
+                Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 6))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
@@ -163,16 +167,15 @@ class MainActivity : AppCompatActivity() {
                 text = labels[i]
                 textSize = 12f
                 gravity = Gravity.CENTER
-                setPadding(Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 8),
-                    Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 8))
+                setPadding(Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 9),
+                    Ui.dp(this@MainActivity, 4), Ui.dp(this@MainActivity, 9))
                 if (active) {
-                    setTextColor(Ui.BRIGHT)
+                    setTextColor(android.graphics.Color.WHITE)
                     typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
                     background = android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                        setColor(Ui.RAISED)
+                        setColor(Ui.ACCENT)
                         cornerRadius = Ui.dp(this@MainActivity, 999).toFloat()
-                        setStroke(Ui.dp(this@MainActivity, 1), Ui.ACCENT)
                     }
                 } else {
                     setTextColor(Ui.MUTED)
@@ -190,7 +193,8 @@ class MainActivity : AppCompatActivity() {
             }
             bar.addView(item)
         }
-        return bar
+        wrap.addView(bar)
+        return wrap
     }
 
     // ---- Tab 0: Home — minimal permissions, live state, statistics ----
@@ -247,12 +251,12 @@ class MainActivity : AppCompatActivity() {
         // needs day-to-day. Device Owner belongs to Stage B and lives in
         // Settings; optional features ask for their permission only when used.
         val permCard = Ui.card(this)
-        permCard.addView(Ui.cardTitle(this, "পারমিশন"))
-        permCard.addView(Ui.label(this, "মাত্র ৩টা জরুরি পারমিশন"))
+        permCard.addView(Ui.cardHeader(this, "পারমিশন") {
+            showScrollableDialog("পারমিশন", "এখানে শুধু প্রতিদিনের কাজের ৩টা জরুরি পারমিশন। সব পারমিশন সেটিংস একসাথে সেটিংস ট্যাবের আলাদা কার্ডে আছে।")
+        })
         permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
         permCard.addView(Ui.statusRow(this, "Usage Access (লিমিট ও হিসাব)", AdminHelper.hasUsageAccess(this)))
         permCard.addView(Ui.statusRow(this, "Overlay (শেড গার্ড)", AdminHelper.hasOverlayPermission(this)))
-        permCard.addView(Ui.secondary(this, "সব পারমিশন সেটিংস একসাথে — সেটিংস ট্যাবে আলাদা কার্ডে।"))
         content.addView(permCard)
 
         val nowCard = Ui.card(this)
@@ -270,7 +274,7 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(Ui.BRIGHT)
                 })
             } else {
-                nowCard.addView(Ui.secondary(this, "এখন কোনো লক চলছে না। ফোকাস ট্যাব থেকে যেকোনো সময় লক শুরু করা যাবে।"))
+                nowCard.addView(Ui.secondary(this, "এখন কোনো লক চলছে না"))
             }
         }
         val pending = Store.pendingAction(this)
@@ -365,10 +369,12 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Named focus presets (v1.4): one tap starts the whole setup ----
         val presetCard = Ui.card(this)
-        presetCard.addView(Ui.cardTitle(this, "আমার প্রিসেট"))
+        presetCard.addView(Ui.cardHeader(this, "আমার প্রিসেট") {
+            showScrollableDialog("আমার প্রিসেট", "নাম দিয়ে প্রিসেট বানালে এক ট্যাপে সেই ফোকাস শুরু হয় — যেমন 'পড়াশোনা', ২ ঘণ্টা, শুধু বইয়ের অ্যাপ চলবে। একই নামে আবার বানালে আগেরটা বদলে যায়। প্রিসেট মোছা সঙ্গে সঙ্গে হয়, চলমান সেশনে কোনো প্রভাব পড়ে না।")
+        })
         val presets = Store.focusPresets(this)
         if (presets.isEmpty()) {
-            presetCard.addView(Ui.secondary(this, "কোনো প্রিসেট নেই। নাম দিয়ে প্রিসেট বানালে এক ট্যাপে সেই ফোকাস শুরু হবে — যেমন পড়াশোনা, ২ ঘণ্টা, বইয়ের অ্যাপ।"))
+            presetCard.addView(Ui.secondary(this, "কোনো প্রিসেট নেই"))
         }
         for (p in presets) {
             presetCard.addView(Ui.body(this, "${p.name} — ${p.minutes} মিনিট"))
@@ -387,9 +393,10 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Notification silence during focus (v1.4) ----
         val quietCard = Ui.card(this)
-        quietCard.addView(Ui.cardTitle(this, "নোটিফিকেশন"))
+        quietCard.addView(Ui.cardHeader(this, "নোটিফিকেশন") {
+            showScrollableDialog("নোটিফিকেশন", "চালু থাকলে ফোকাস চলাকালে Do Not Disturb নিজে থেকে অন হয়, শেষ হলে আগের অবস্থায় ফেরে। অ্যালার্ম বাজবে।")
+        })
         quietCard.addView(Ui.statusRow(this, "ফোকাস/লকের সময় নোটিফিকেশন চুপ", Store.silenceDuringLock(this)))
-        quietCard.addView(Ui.secondary(this, "চালু থাকলে ফোকাস চলাকালে Do Not Disturb নিজে থেকে অন হয়, শেষ হলে আগের অবস্থায় ফেরে। অ্যালার্ম বাজবে।"))
         quietCard.addView(Ui.secondaryButton(this,
             if (Store.silenceDuringLock(this)) "বন্ধ করো" else "চালু করো") { toggleSilence() })
         content.addView(quietCard)
@@ -484,7 +491,9 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Blocked websites (v1.4, Chrome) ----
         val siteCard = Ui.card(this)
-        siteCard.addView(Ui.cardTitle(this, "ওয়েবসাইট ব্লক"))
+        siteCard.addView(Ui.cardHeader(this, "ওয়েবসাইট ব্লক") {
+            showScrollableDialog("ওয়েবসাইট ব্লক", "Device Owner চালু থাকলে Chrome নিজেই ব্লক/Allow তালিকা মানে — ইনকগনিটো বন্ধ থাকে, SafeSearch জোর করে চালু থাকে। Allow তালিকার সাইট কখনো ব্লক হয় না — ব্লক তালিকা বা ক্যাটাগরিতে থাকলেও চলবে।")
+        })
         siteCard.addView(Ui.label(this, "যেকোনো ব্রাউজারে এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
         // ---- v1.9.0: Chrome's own managed blocking (Device Owner layer) ----
         siteCard.addView(
@@ -493,7 +502,6 @@ class MainActivity : AppCompatActivity() {
                 AdminHelper.isDeviceOwner(this), "চালু", "Owner চালু হলে চালু হবে"
             )
         )
-        siteCard.addView(Ui.secondary(this, "চালু থাকলে Chrome নিজেই ব্লক/Allow তালিকা মানে — ইনকগনিটো বন্ধ থাকে, SafeSearch জোর করে চালু থাকে।"))
         // ---- v1.12.0 Stage 5: wipe Chrome's data (Device Owner) ----
         // A reset action, not a weakening — but it destroys his Chrome
         // logins, so it is confirm + PIN gated and says so plainly.
@@ -723,11 +731,12 @@ class MainActivity : AppCompatActivity() {
         // owner removal stays PIN + 24h in the সুরক্ষা card below.
         if (!AdminHelper.isDeviceOwner(this)) {
             val ownerCard = Ui.card(this)
-            ownerCard.addView(Ui.cardTitle(this, "Device Owner চালু করা (Stage B)"))
+            ownerCard.addView(Ui.cardHeader(this, "Device Owner চালু করা (Stage B)") {
+                showScrollableDialog("Device Owner (Stage B)",
+                    "Device Owner চালু হলেই FocusLock সবচেয়ে কড়া হয় — আনইনস্টল, ফোর্স-স্টপ, Settings, তারিখ-সময় বদল সব বন্ধ হয়ে যায়।\n\n" +
+                        "চালু করা একবারের কাজ, আর কোনো অ্যাপই শুধু এক ট্যাপে এই অনুমতি পায় না — Android-এর নিয়মে একবার শেল-স্তরের কমান্ড লাগেই (Dhizuku-র ক্ষেত্রেও একই নিয়ম, শুধু কমান্ডটা Shizuku দিয়ে চালানো হয়)।")
+            })
             ownerCard.addView(Ui.statusRow(this, "Device Owner অবস্থা", false, "চালু আছে", "এখনো হয়নি"))
-            ownerCard.addView(Ui.secondary(this,
-                "Device Owner চালু হলেই FocusLock সবচেয়ে কড়া হয় — আনইনস্টল, ফোর্স-স্টপ, Settings, তারিখ-সময় বদল সব বন্ধ হয়ে যায়। " +
-                    "চালু করা একবারের কাজ, আর কোনো অ্যাপই শুধু এক ট্যাপে এই অনুমতি পায় না — Android-এর নিয়মে একবার শেল-স্তরের কমান্ড লাগেই (Dhizuku-র ক্ষেত্রেও একই নিয়ম, শুধু কমান্ডটা Shizuku দিয়ে চালানো হয়)।"))
             ownerCard.addView(Ui.gap(this, 8))
             ownerCard.addView(Ui.body(this, "চালু করার আগের চেকলিস্ট"))
             ownerCard.addView(Ui.secondary(this,
@@ -767,7 +776,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         val securityCard = Ui.card(this)
-        securityCard.addView(Ui.cardTitle(this, "সুরক্ষা"))
+        securityCard.addView(Ui.cardHeader(this, "সুরক্ষা") {
+            showScrollableDialog("সুরক্ষা",
+                "জরুরি বের-হওয়ার পথ: Owner সরালে আগে সব restriction উঠবে, suspend/hide করা অ্যাপ ফিরবে, তারপর Owner যাবে — কোনো অ্যাপ আটকে থাকবে না।\n\n" +
+                    "অ্যাকাউন্ট ব্লক: চালু থাকলে Settings থেকে Google বা অন্য কোনো অ্যাকাউন্ট যোগ করা বা মোছা যাবে না। অ্যাপের ভেতরের লগইন আগের মতোই চলবে।\n\n" +
+                    "লগ: Device Owner চালু থাকলে Android নিজে নিরাপত্তা ও নেটওয়ার্ক লগ রাখে — লক স্ক্রিন খোলার চেষ্টা, ADB ব্যবহার ইত্যাদির প্রমাণ। Network লগে শুধু মোট ইভেন্ট সংখ্যা দেখায়।")
+        })
         pendingInfo(securityCard)
         securityCard.addView(Ui.secondaryButton(this, "PIN সেট / বদলাও") { setPinFlow() })
         securityCard.addView(Ui.secondaryButton(this, "Protection Off করার আবেদন (24 ঘণ্টা লাগবে)") {
@@ -794,8 +808,6 @@ class MainActivity : AppCompatActivity() {
                     requestWeakening("remove_device_owner", "Device Owner removal")
                 }
             })
-            securityCard.addView(Ui.secondary(this,
-                "জরুরি বের-হওয়ার পথ: Owner সরালে আগে সব restriction উঠবে, suspend/hide করা অ্যাপ ফিরবে, তারপর Owner যাবে — কোনো অ্যাপ আটকে থাকবে না।"))
         }
         if (Store.isExitFailed(this)) {
             securityCard.addView(Ui.secondary(this,
@@ -816,9 +828,9 @@ class MainActivity : AppCompatActivity() {
         securityCard.addView(Ui.gap(this, 8))
         val accountBlock = Store.accountBlockOn(this)
         securityCard.addView(Ui.statusRow(this, "অ্যাকাউন্ট যোগ/মোছা ব্লক (Device Owner)", accountBlock))
-        securityCard.addView(Ui.secondary(this,
-            "চালু থাকলে Settings থেকে Google বা অন্য কোনো অ্যাকাউন্ট যোগ করা বা মোছা যাবে না। অ্যাপের ভেতরের লগইন আগের মতোই চলবে।" +
-                if (!ownerNow) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+        if (!ownerNow) {
+            securityCard.addView(Ui.secondary(this, "Device Owner চালু হলেই কার্যকর হবে"))
+        }
         if (!accountBlock) {
             securityCard.addView(Ui.primaryButton(this, "অ্যাকাউন্ট ব্লক চালু করো") {
                 Store.setAccountBlockOn(this, true)
@@ -841,10 +853,10 @@ class MainActivity : AppCompatActivity() {
         val frpEmail = Store.frpEmail(this)
         securityCard.addView(Ui.secondary(this,
             if (frpEmail.isBlank()) {
-                "FRP বসানো নেই। ইমেইল বসালে recovery mode থেকে ফ্যাক্টরি রিসেট করার পরেও ফোন সেটআপের সময় এই Google অ্যাকাউন্টে সাইন-ইন চাইবে — অ্যাকাউন্ট ছাড়া ফোন সেটআপ হবে না। সাবধান: ভুল বা অন্য কারো ইমেইল দিলে রিসেটের পর নিজের ফোনেই আটকে যাবে।"
+                "FRP বসানো নেই। সাবধান: ভুল ইমেইল দিলে রিসেটের পর নিজের ফোনেই আটকে যাবে।"
             } else {
-                "FRP অ্যাকাউন্ট: $frpEmail — recovery mode থেকে রিসেট করার পরেও এই অ্যাকাউন্ট ছাড়া ফোন সেটআপ হবে না।"
-            } + if (!ownerNow) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+                "FRP অ্যাকাউন্ট: $frpEmail"
+            } + if (!ownerNow) " (Device Owner চালু হলেই কার্যকর হবে)" else ""))
         if (frpEmail.isBlank()) {
             securityCard.addView(Ui.secondaryButton(this, "FRP ইমেইল বসাও") { frpEmailFlow(frpChange = false) })
         } else {
@@ -861,9 +873,6 @@ class MainActivity : AppCompatActivity() {
         // ---- v1.12.0 Stage 6: security / network logs (tamper evidence) ----
         securityCard.addView(Ui.gap(this, 8))
         securityCard.addView(Ui.body(this, "লগ (Device Owner)"))
-        securityCard.addView(Ui.secondary(this,
-            if (ownerNow) "Device Owner চালু থাকলে Android নিজে নিরাপত্তা ও নেটওয়ার্ক লগ রাখে — লক স্ক্রিন খোলার চেষ্টা, ADB ব্যবহার, কোন হোস্টে সংযোগ হয়েছে ইত্যাদির প্রমাণ।"
-            else "লগ দেখতে Device Owner লাগবে — Owner চালু হলে Android নিজে এই লগ রাখা শুরু করবে।"))
         securityCard.addView(Ui.secondaryButton(this, "Security log দেখো") { showSecurityLogs() })
         securityCard.addView(Ui.secondaryButton(this, "Network log সারাংশ") { showNetworkLogSummary() })
         securityCard.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Stage B-এর জন্য)") {
@@ -881,7 +890,11 @@ class MainActivity : AppCompatActivity() {
         // Owner the choices still save — they take effect the moment
         // owner is active, and the card says so plainly.
         val installCard = Ui.card(this)
-        installCard.addView(Ui.cardTitle(this, "অ্যাপ ইনস্টল ও আনইনস্টল (Device Owner)"))
+        installCard.addView(Ui.cardHeader(this, "অ্যাপ ইনস্টল ও আনইনস্টল (Device Owner)") {
+            showScrollableDialog("অ্যাপ ইনস্টল ও আনইনস্টল",
+                "ইনস্টল ব্লক চালু থাকলে নতুন কোনো অ্যাপই ইনস্টল হবে না — Play Store থেকেও না, APK ফাইল থেকেও না, অন্য অ্যাপের আপডেটও আটকে থাকবে। FocusLock আপডেটের আগে ব্লক বন্ধ করতে হবে (PIN + 24 ঘণ্টা)।\n\n" +
+                    "আনইনস্টল-সুরক্ষা: এখানে যোগ করা অ্যাপ আনইনস্টল করা যাবে না। সুরক্ষা তোলাও PIN + 24 ঘণ্টা।")
+        })
         val ownerActive = AdminHelper.isDeviceOwner(this)
         val installBlock = Store.installBlockOn(this)
         installCard.addView(Ui.statusRow(this, "নতুন অ্যাপ ইনস্টল ব্লক", installBlock))
@@ -915,7 +928,7 @@ class MainActivity : AppCompatActivity() {
         installCard.addView(Ui.body(this, "আনইনস্টল-সুরক্ষিত অ্যাপ"))
         val protectedPkgs = Store.uninstallProtectedPkgs(this).sorted()
         if (protectedPkgs.isEmpty()) {
-            installCard.addView(Ui.secondary(this, "কোনো অ্যাপ সুরক্ষিত নেই। এখানে যোগ করা অ্যাপ আনইনস্টল করা যাবে না।"))
+            installCard.addView(Ui.secondary(this, "কোনো অ্যাপ সুরক্ষিত নেই"))
         } else {
             for (pkg in protectedPkgs) {
                 val label = appLabel(pkg)
@@ -981,7 +994,11 @@ class MainActivity : AppCompatActivity() {
         // dns_filter_off / network_lock_off). Without Device Owner the
         // choices still save and the card says so plainly.
         val netCard = Ui.card(this)
-        netCard.addView(Ui.cardTitle(this, "নেটওয়ার্ক সুরক্ষা (Device Owner)"))
+        netCard.addView(Ui.cardHeader(this, "নেটওয়ার্ক সুরক্ষা (Device Owner)") {
+            showScrollableDialog("নেটওয়ার্ক সুরক্ষা",
+                "DNS ফিল্টার: সব অ্যাপের ইন্টারনেট family.cloudflare-dns.com দিয়ে যায় — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যায়। কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে।\n\n" +
+                    "নেটওয়ার্ক লক: ফোকাস সেশন বা শিডিউল-লক চলাকালে WiFi, হটস্পট ও এয়ারপ্লেন মোডের সেটিংস বদলানো যায় না — লক শেষ হলেই আবার খুলে যায়। সংযোগ বন্ধ হয় না, শুধু বদলানো আটকায়; তবে এই সময়ে নতুন WiFi নেটওয়ার্কেও যোগ দেওয়া যায় না।")
+        })
         val dnsOn = Store.dnsFilterOn(this)
         netCard.addView(Ui.statusRow(this, "DNS ফিল্টার (পরিবার-বান্ধব)", dnsOn))
         netCard.addView(Ui.secondary(this, when {
@@ -1013,9 +1030,9 @@ class MainActivity : AppCompatActivity() {
         netCard.addView(Ui.gap(this, 8))
         val netLockOn = Store.networkLockOn(this)
         netCard.addView(Ui.statusRow(this, "ফোকাস/লকের সময় WiFi-হটস্পট-এয়ারপ্লেন সেটিংস লক", netLockOn))
-        netCard.addView(Ui.secondary(this,
-            "চালু থাকলে ফোকাস সেশন বা শিডিউল-লক চলাকালে WiFi, হটস্পট ও এয়ারপ্লেন মোডের সেটিংস বদলানো যাবে না — লক শেষ হলেই আবার খুলে যাবে। WiFi/ডেটা বন্ধ হয় না, শুধু বদলানো আটকায়; তবে এই সময়ে নতুন WiFi নেটওয়ার্কেও যোগ দেওয়া যাবে না।" +
-                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+        if (!ownerActive) {
+            netCard.addView(Ui.secondary(this, "Device Owner চালু হলেই কার্যকর হবে"))
+        }
         if (!netLockOn) {
             netCard.addView(Ui.primaryButton(this, "নেটওয়ার্ক লক চালু করো") {
                 Store.setNetworkLockOn(this, true)
@@ -1043,12 +1060,15 @@ class MainActivity : AppCompatActivity() {
         // (PIN + 24h pending: keyguard_hardening_off). Without Device
         // Owner the choice still saves and the card says so plainly.
         val keyguardCard = Ui.card(this)
-        keyguardCard.addView(Ui.cardTitle(this, "লক স্ক্রিন ও পাসওয়ার্ড (Device Owner)"))
+        keyguardCard.addView(Ui.cardHeader(this, "লক স্ক্রিন ও পাসওয়ার্ড (Device Owner)") {
+            showScrollableDialog("লক স্ক্রিন ও পাসওয়ার্ড",
+                "চালু থাকলে: লক স্ক্রিনে ক্যামেরা ও উইজেট বন্ধ থাকে, লক স্ক্রিনে নোটিফিকেশনের লেখা লুকানো থাকে, ডিভাইস PIN কমপক্ষে ৬ সংখ্যার জটিল হতে হবে (পরের বার PIN বদলানোর সময় থেকে কার্যকর), আর স্ক্রিন নিভলে ৫ মিনিটের মধ্যে অটো-লক হবে।")
+        })
         val keyguardOn = Store.keyguardHardeningOn(this)
         keyguardCard.addView(Ui.statusRow(this, "লক স্ক্রিন হার্ডেনিং", keyguardOn))
-        keyguardCard.addView(Ui.secondary(this,
-            "চালু থাকলে: লক স্ক্রিনে ক্যামেরা ও উইজেট বন্ধ থাকে, লক স্ক্রিনে নোটিফিকেশনের লেখা লুকানো থাকে, ডিভাইস PIN কমপক্ষে ৬ সংখ্যার জটিল হতে হবে (পরের বার PIN বদলানোর সময় থেকে কার্যকর), আর স্ক্রিন নিভলে ৫ মিনিটের মধ্যে অটো-লক হবে।" +
-                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে — এখন পছন্দটা শুধু সংরক্ষিত থাকবে।" else ""))
+        if (!ownerActive) {
+            keyguardCard.addView(Ui.secondary(this, "Device Owner চালু হলেই কার্যকর হবে"))
+        }
         if (!keyguardOn) {
             keyguardCard.addView(Ui.primaryButton(this, "হার্ডেনিং চালু করো") {
                 Store.setKeyguardHardeningOn(this, true)
@@ -1073,10 +1093,12 @@ class MainActivity : AppCompatActivity() {
         // system-critical packages are never offered (same exclusions as
         // AdminHelper enforces when applying).
         val hiddenCard = Ui.card(this)
-        hiddenCard.addView(Ui.cardTitle(this, "অ্যাপ লুকিয়ে রাখা (Device Owner)"))
-        hiddenCard.addView(Ui.secondary(this,
-            "লুকানো অ্যাপ launcher ও অ্যাপ তালিকা থেকে অদৃশ্য হয়ে যায় — খোলাই যায় না।" +
-                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে — এখন পছন্দগুলো শুধু সংরক্ষিত থাকবে।" else ""))
+        hiddenCard.addView(Ui.cardHeader(this, "অ্যাপ লুকিয়ে রাখা (Device Owner)") {
+            showScrollableDialog("অ্যাপ লুকিয়ে রাখা", "লুকানো অ্যাপ launcher ও অ্যাপ তালিকা থেকে অদৃশ্য হয়ে যায় — খোলাই যায় না। ফিরিয়ে আনা দুর্বলীকরণ, তাই PIN + 24 ঘণ্টা লাগে।")
+        })
+        if (!ownerActive) {
+            hiddenCard.addView(Ui.secondary(this, "Device Owner চালু হলেই কার্যকর হবে"))
+        }
         val hiddenPkgs = Store.hiddenApps(this).sorted()
         if (hiddenPkgs.isEmpty()) {
             hiddenCard.addView(Ui.secondary(this, "কোনো অ্যাপ লুকানো নেই।"))
@@ -1135,17 +1157,18 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Automation API (v1.6.0, PhoneLink) ----
         val autoCard = Ui.card(this)
-        autoCard.addView(Ui.cardTitle(this, "অটোমেশন (PhoneLink)"))
+        autoCard.addView(Ui.cardHeader(this, "অটোমেশন (PhoneLink)") {
+            showScrollableDialog("অটোমেশন (PhoneLink)",
+                "কমান্ড (explicit broadcast, action: com.focuslock.app.AUTOMATION):\n" +
+                    "cmd=block_app (app, mins) · cmd=lock_full (mins) · cmd=focus (preset, mins ঐচ্ছিক) · " +
+                    "cmd=unblock (app থাকলে শুধু ওই অ্যাপের টাইম-ব্লক; না থাকলে অটোমেশনের সব ব্লক ও অটোমেশন-সেশন)।\n\n" +
+                    "unblock শুধু অটোমেশনের শুরু করা জিনিসই তুলতে পারে — হাতে শুরু করা ফোকাস, শিডিউল আর দৈনিক লিমিট কখনোই না।\n\n" +
+                    "Token শুধু hash আকারে থাকে, ব্যাকআপেও যায় না — আনইনস্টল করলে আবার বসাতে হবে।")
+        })
         val autoOn = Store.automationTokenHash(this).isNotBlank()
         autoCard.addView(Ui.secondary(this,
             if (autoOn) "API চালু আছে — token মিললেই PhoneLink কমান্ড পাঠাতে পারবে।"
             else "API বন্ধ আছে — token বসালে তবেই চালু হবে।"))
-        autoCard.addView(Ui.secondary(this,
-            "কমান্ড (explicit broadcast, action: com.focuslock.app.AUTOMATION): " +
-                "cmd=block_app (app, mins) · cmd=lock_full (mins) · cmd=focus (preset, mins ঐচ্ছিক) · " +
-                "cmd=unblock (app থাকলে শুধু ওই অ্যাপের টাইম-ব্লক; না থাকলে অটোমেশনের সব ব্লক ও অটোমেশন-সেশন)। " +
-                "unblock শুধু অটোমেশনের শুরু করা জিনিসই তুলতে পারে — হাতে শুরু করা ফোকাস, শিডিউল আর দৈনিক লিমিট কখনোই না। " +
-                "Token শুধু hash আকারে থাকে, ব্যাকআপেও যায় না — আনইনস্টল করলে আবার বসাতে হবে।"))
         autoCard.addView(Ui.secondaryButton(this, "Token বসাও / বদলাও (PIN লাগবে)") {
             verifyPin { setAutomationTokenFlow() }
         })
@@ -1163,8 +1186,9 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Settings backup / restore (v1.4) ----
         val backupCard = Ui.card(this)
-        backupCard.addView(Ui.cardTitle(this, "সেটিংস ব্যাকআপ"))
-        backupCard.addView(Ui.secondary(this, "নতুন সংস্করণ বসাতে আনইনস্টল করলে সেটিংস মুছে যায়। ব্যাকআপ ফাইল রাখলে এক ট্যাপে শিডিউল, লিমিট, প্রিসেট, সাইট-ব্লক সব ফিরে আসবে। (PIN ব্যাকআপে থাকে না — আবার সেট করতে হবে।)"))
+        backupCard.addView(Ui.cardHeader(this, "সেটিংস ব্যাকআপ") {
+            showScrollableDialog("সেটিংস ব্যাকআপ", "নতুন সংস্করণ বসাতে আনইনস্টল করলে সেটিংস মুছে যায়। ব্যাকআপ ফাইল রাখলে এক ট্যাপে শিডিউল, লিমিট, প্রিসেট, সাইট-ব্লক সব ফিরে আসবে। (PIN ব্যাকআপে থাকে না — আবার সেট করতে হবে।)")
+        })
         backupCard.addView(Ui.secondaryButton(this, "ব্যাকআপ নাও (ফাইলে সেভ করো)") {
             exportLauncher.launch("focuslock-backup.json")
         })
@@ -1814,7 +1838,7 @@ object RowButtonStyle {
         android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(Ui.RAISED)
-            cornerRadius = Ui.dp(ctx, 14).toFloat()
+            cornerRadius = Ui.dp(ctx, 999).toFloat()
             setStroke(Ui.dp(ctx, 1), Ui.STROKE)
         }
 }

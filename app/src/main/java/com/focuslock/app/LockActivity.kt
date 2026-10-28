@@ -145,7 +145,7 @@ class LockActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Ui.BG)
+            background = Ui.aurora(this@LockActivity)
             setPadding(Ui.dp(this@LockActivity, 24), Ui.dp(this@LockActivity, 24),
                 Ui.dp(this@LockActivity, 24), Ui.dp(this@LockActivity, 24))
         }

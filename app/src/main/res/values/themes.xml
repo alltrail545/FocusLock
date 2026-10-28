@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- FocusLock design system (Tamim, 2026-10-23): near-black green-tinted
-         background #101415, emerald accent #10B981. -->
+    <!-- FocusLock design system v2 "Classic Glass" (Tamim, 2026-10-28):
+         deep indigo base #160B36 under the aurora gradient, violet primary,
+         pink accent. -->
     <style name="Theme.FocusLock" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="colorPrimary">#10B981</item>
-        <item name="colorPrimaryDark">#101415</item>
-        <item name="colorAccent">#2FD68F</item>
-        <item name="android:windowBackground">#101415</item>
-        <item name="android:statusBarColor">#101415</item>
-        <item name="android:navigationBarColor">#101415</item>
+        <item name="colorPrimary">#7C3AED</item>
+        <item name="colorPrimaryDark">#160B36</item>
+        <item name="colorAccent">#E879C6</item>
+        <item name="android:windowBackground">#160B36</item>
+        <item name="android:statusBarColor">#160B36</item>
+        <item name="android:navigationBarColor">#160B36</item>
     </style>
 </resources>

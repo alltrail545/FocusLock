@@ -11,7 +11,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="FocusLock"
-        android:textColor="#D9EAE0"
+        android:textColor="#FFFFFF"
         android:textSize="15sp"
         android:textStyle="bold" />
 
@@ -20,7 +20,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:text="এক ট্যাপে ফোকাস শুরু"
-        android:textColor="#8FA79B"
+        android:textColor="#DCD6F7"
         android:textSize="12sp" />
 
     <LinearLayout
@@ -38,7 +38,7 @@
             android:layout_weight="1"
             android:background="@drawable/widget_btn_primary"
             android:text="25 মিনিট"
-            android:textColor="#101415"
+            android:textColor="#FFFFFF"
             android:textSize="13sp" />
 
         <Button
@@ -50,7 +50,7 @@
             android:layout_weight="1"
             android:background="@drawable/widget_btn_secondary"
             android:text="1 ঘণ্টা"
-            android:textColor="#D9EAE0"
+            android:textColor="#FFFFFF"
             android:textSize="13sp" />
 
         <Button
@@ -61,7 +61,7 @@
             android:layout_weight="1"
             android:background="@drawable/widget_btn_secondary"
             android:text="অ্যাপ খোলো"
-            android:textColor="#D9EAE0"
+            android:textColor="#FFFFFF"
             android:textSize="13sp" />
     </LinearLayout>
 </LinearLayout>
