@@ -64,6 +64,12 @@ object Engine {
 
     private fun enforce(ctx: Context) {
         Store.applyPendingIfDue(ctx)
+        // v1.9.0: keep Chrome's Device Owner managed config in step with
+        // the site lists. Runs right after the 24h-pending application, so
+        // a weakening change that just landed re-syncs in the same tick;
+        // the signature guard inside makes this a no-op when nothing
+        // changed, and it is a silent no-op without Device Owner.
+        AdminHelper.syncBrowserRestrictions(ctx)
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.

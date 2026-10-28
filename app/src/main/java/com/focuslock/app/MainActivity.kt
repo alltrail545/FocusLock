@@ -432,6 +432,14 @@ class MainActivity : AppCompatActivity() {
         val siteCard = Ui.card(this)
         siteCard.addView(Ui.cardTitle(this, "ওয়েবসাইট ব্লক"))
         siteCard.addView(Ui.label(this, "যেকোনো ব্রাউজারে এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
+        // ---- v1.9.0: Chrome's own managed blocking (Device Owner layer) ----
+        siteCard.addView(
+            Ui.statusRow(
+                this, "Chrome সরাসরি ব্লক (Device Owner)",
+                AdminHelper.isDeviceOwner(this), "চালু", "Owner চালু হলে চালু হবে"
+            )
+        )
+        siteCard.addView(Ui.secondary(this, "চালু থাকলে Chrome নিজেই ব্লক/Allow তালিকা মানে — ইনকগনিটো বন্ধ থাকে, SafeSearch জোর করে চালু থাকে।"))
         val sites = Store.blockedSites(this)
         if (sites.isEmpty()) {
             siteCard.addView(Ui.secondary(this, "কোনো সাইট ব্লক করা নেই।"))
@@ -458,6 +466,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 siteCard.addView(Ui.secondaryButton(this, "চালু করো: ${cat.labelBn} (${cat.domains.size}টি সাইট)") {
                     Store.saveSiteCategories(this, Store.siteCategories(this) + cat.id)
+                    AdminHelper.syncBrowserRestrictions(this) // v1.9.0: Chrome managed config follows at once
                     Store.logTamper(this, "Site category filter enabled: ${cat.id}")
                     toast("চালু হয়েছে: ${cat.labelBn}")
                     buildUi()
@@ -476,6 +485,7 @@ class MainActivity : AppCompatActivity() {
             siteCard.addView(Ui.body(this, site))
             siteCard.addView(Ui.secondaryButton(this, "তুলে দাও: $site") {
                 Store.saveSiteAllowList(this, Store.siteAllowList(this) - site)
+                AdminHelper.syncBrowserRestrictions(this) // v1.9.0: Chrome managed config follows at once
                 Store.logTamper(this, "Site removed from allow list: $site")
                 toast("তুলে দেওয়া হয়েছে: $site")
                 buildUi()
@@ -493,6 +503,7 @@ class MainActivity : AppCompatActivity() {
             siteCard.addView(Ui.secondaryButton(this, "চালু করো: শুধু Allow তালিকার সাইট চলবে") {
                 val enable = {
                     Store.setSiteAllowOnly(this, true)
+                    AdminHelper.syncBrowserRestrictions(this) // v1.9.0: Chrome gets the "*" block + allow exceptions
                     Store.logTamper(this, "Allow-only website mode enabled")
                     toast("চালু হয়েছে — এখন শুধু Allow তালিকার সাইট খুলবে")
                     buildUi()
@@ -528,6 +539,7 @@ class MainActivity : AppCompatActivity() {
                     toast("ঠিকমতো সাইটের নাম দাও, যেমন bbc.com")
                 } else {
                     Store.saveSiteAllowList(this, Store.siteAllowList(this) + host)
+                    AdminHelper.syncBrowserRestrictions(this) // v1.9.0: Chrome managed config follows at once
                     Store.logTamper(this, "Website allowed: $host")
                     toast("Allow তালিকায় যোগ হয়েছে: $host")
                     buildUi()
@@ -553,6 +565,7 @@ class MainActivity : AppCompatActivity() {
                     toast("ঠিকমতো সাইটের নাম দাও, যেমন facebook.com")
                 } else {
                     Store.saveBlockedSites(this, Store.blockedSites(this) + host)
+                    AdminHelper.syncBrowserRestrictions(this) // v1.9.0: Chrome managed config follows at once
                     Store.logTamper(this, "Website blocked: $host")
                     toast("ব্লক হয়েছে: $host")
                     buildUi()

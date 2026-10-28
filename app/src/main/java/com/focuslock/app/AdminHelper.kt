@@ -4,6 +4,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.provider.Settings
 import android.telecom.TelecomManager
 
@@ -70,6 +71,8 @@ object AdminHelper {
         } catch (e: Throwable) {
             Store.logTamper(ctx, "applyStrictPolicies failed: ${e.message}")
         }
+        // v1.9.0: standing policies now include Chrome's managed config.
+        syncBrowserRestrictions(ctx)
     }
 
     /**
@@ -86,6 +89,104 @@ object AdminHelper {
             dpm(ctx).setLockTaskPackages(adminComponent(ctx), allowed)
         } catch (e: Throwable) {
             Store.logTamper(ctx, "applyLockTaskPackages failed: ${e.message}")
+        }
+    }
+
+    // ---- v1.9.0: Chrome managed configuration (Device Owner only) ----
+
+    /** The one browser whose managed configuration we drive in this version. */
+    const val CHROME_PACKAGE = "com.android.chrome"
+
+    /** Chrome's URL lists are documented to accept at most 1000 entries. */
+    private const val MAX_URL_LIST_ENTRIES = 1000
+
+    /**
+     * Plain-host form for Chrome's URL lists: scheme/path/port/userinfo and
+     * a leading "www." come off the same way [SiteCategories.hostOf]
+     * normalises a live URL host. Blank or dot-less leftovers are dropped —
+     * they can never be valid hosts for Chrome's lists.
+     */
+    private fun chromeHost(raw: String): String? {
+        val host = SiteCategories.hostOf(raw).removePrefix("www.")
+        return host.takeIf { it.isNotBlank() && it.contains(".") }
+    }
+
+    private fun isPackageInstalled(ctx: Context, pkg: String): Boolean =
+        try {
+            ctx.packageManager.getPackageInfo(pkg, 0)
+            true
+        } catch (_: Throwable) { false }
+
+    /**
+     * Browser-level managed blocking: an ADDITIONAL layer on top of the
+     * accessibility URL blocking (which keeps working exactly as before,
+     * for every browser). When this app is Device Owner, Chrome itself is
+     * told — via its managed configuration — to disable Incognito, force
+     * Google SafeSearch, and honour our URL block/allow lists natively,
+     * so a blocked site never even loads and no URL-bar reading is needed
+     * for Chrome.
+     *
+     * The lists come from the SAME stores the accessibility path uses
+     * (blocked sites + enabled category domains; the allow list), whose
+     * weakening already follows the PIN + 24h rule — this function adds no
+     * new way to weaken anything: it only ever re-applies what the lists
+     * currently say. Allow-only mode maps onto Chrome as a "*" blocklist
+     * entry, which Chrome's URLAllowlist then carves exceptions out of —
+     * the exact mirror of the accessibility behaviour.
+     *
+     * Everything is built from the current lists on each call, but the
+     * DPM write happens only when the content signature changes (see
+     * [Store.chromeRestrictionsSignature]), so Engine.tick can call this
+     * every second safely. Device Owner absent, or Chrome absent: silent
+     * no-op — the restrictions, if ever applied, are never cleared from a
+     * non-owner state. Any failure is tamper-logged at most once per
+     * change and never crashes or weakens enforcement.
+     */
+    fun syncBrowserRestrictions(ctx: Context) {
+        var signature: String? = null
+        try {
+            if (!isDeviceOwner(ctx)) return
+            if (!isPackageInstalled(ctx, CHROME_PACKAGE)) return
+
+            val block = LinkedHashSet<String>()
+            if (Store.siteAllowOnly(ctx)) block += "*"
+            for (site in Store.blockedSites(ctx)) chromeHost(site)?.let { block += it }
+            for (domain in SiteCategories.domainsFor(Store.siteCategories(ctx))) {
+                chromeHost(domain)?.let { block += it }
+            }
+            val blockList = block.take(MAX_URL_LIST_ENTRIES)
+            val allowList = Store.siteAllowList(ctx)
+                .mapNotNull { chromeHost(it) }
+                .distinct()
+                .take(MAX_URL_LIST_ENTRIES)
+
+            // Content signature from the list hashCodes (List.hashCode is
+            // content-based) — stable across processes for equal contents,
+            // different as soon as any entry is added, removed or reordered.
+            val sig = "v1:${blockList.hashCode()}:${blockList.size}:" +
+                "${allowList.hashCode()}:${allowList.size}:" +
+                "${Store.siteAllowOnly(ctx)}"
+            signature = sig
+            if (Store.chromeRestrictionsSignature(ctx) == sig) return
+
+            val bundle = Bundle().apply {
+                putInt("IncognitoModeAvailability", 1) // 1 = incognito disabled
+                putBoolean("ForceGoogleSafeSearch", true)
+                putStringArray("URLBlocklist", blockList.toTypedArray())
+                putStringArray("URLAllowlist", allowList.toTypedArray())
+            }
+            dpm(ctx).setApplicationRestrictions(adminComponent(ctx), CHROME_PACKAGE, bundle)
+            Store.setChromeRestrictionsSignature(ctx, sig)
+            Store.setChromeRestrictionsFailedSignature(ctx, null)
+        } catch (e: Throwable) {
+            // Log at most once per failing change — never once per tick.
+            try {
+                val key = signature ?: "uncomputed"
+                if (Store.chromeRestrictionsFailedSignature(ctx) != key) {
+                    Store.setChromeRestrictionsFailedSignature(ctx, key)
+                    Store.logTamper(ctx, "syncBrowserRestrictions failed: ${e.message}")
+                }
+            } catch (_: Throwable) { }
         }
     }
 

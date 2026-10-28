@@ -322,6 +322,34 @@ object Store {
         prefs(ctx).edit().putBoolean("site_allow_only", on).apply()
 
 
+    // ---- v1.9.0: Chrome managed-config (Device Owner) sync signature ----
+    // AdminHelper.syncBrowserRestrictions applies Chrome's managed
+    // configuration (incognito off, SafeSearch forced, URL lists) from the
+    // site lists above. That DPM call must NOT be repeated every engine
+    // tick, so the last applied content signature is persisted here: sync
+    // is a no-op while the signature is unchanged. The matching failure
+    // signature is kept alongside it so a failing sync is written to the
+    // tamper log at most once per change, not once per second.
+    fun chromeRestrictionsSignature(ctx: Context): String? =
+        prefs(ctx).getString("chrome_restrictions_signature", null)
+
+    fun setChromeRestrictionsSignature(ctx: Context, sig: String?) {
+        val ed = prefs(ctx).edit()
+        if (sig == null) ed.remove("chrome_restrictions_signature")
+        else ed.putString("chrome_restrictions_signature", sig)
+        ed.apply()
+    }
+
+    fun chromeRestrictionsFailedSignature(ctx: Context): String? =
+        prefs(ctx).getString("chrome_restrictions_failed_signature", null)
+
+    fun setChromeRestrictionsFailedSignature(ctx: Context, sig: String?) {
+        val ed = prefs(ctx).edit()
+        if (sig == null) ed.remove("chrome_restrictions_failed_signature")
+        else ed.putString("chrome_restrictions_failed_signature", sig)
+        ed.apply()
+    }
+
     // ---- v1.8.0: persisted DND restore state ----
     // Engine's "DND was applied, restore this filter afterwards" state used
     // to live only in memory: if the process died mid-lock (XOS kills
