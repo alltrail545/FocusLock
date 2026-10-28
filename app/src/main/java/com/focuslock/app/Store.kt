@@ -256,6 +256,53 @@ object Store {
                 // and lifts them via AdminHelper.applyNetworkLock.
                 setNetworkLockOn(ctx, false)
             }
+            action == "keyguard_hardening_off" -> {
+                // v1.12.0: the 24h delay has passed — the flag goes off and
+                // the keyguard/password policies are reset in the same tick
+                // (AdminHelper no-ops without Device Owner).
+                setKeyguardHardeningOn(ctx, false)
+                AdminHelper.applyKeyguardHardening(ctx)
+            }
+            action == "account_block_off" -> {
+                // v1.12.0: same pattern — flag off, restriction lifted in
+                // the same tick via the marker-guarded AdminHelper apply.
+                setAccountBlockOn(ctx, false)
+                AdminHelper.applyAccountBlock(ctx)
+            }
+            action.startsWith("unhide_app:") -> {
+                // v1.12.0: un-hiding an app is weakening (PIN + 24h).
+                // Dropping the package from the desired set makes
+                // applyHiddenApps restore it (verified diff inside).
+                val pkg = action.removePrefix("unhide_app:")
+                if (pkg.isNotBlank()) {
+                    saveHiddenApps(ctx, hiddenApps(ctx) - pkg)
+                    AdminHelper.applyHiddenApps(ctx)
+                }
+            }
+            action.startsWith("permission_unlock:") -> {
+                // v1.12.0: lifting a permission lock is weakening
+                // (PIN + 24h). Format "permission_unlock:<pkg>:<perm>" —
+                // package names and permission strings never contain ':',
+                // so a plain split is exact.
+                val parts = action.removePrefix("permission_unlock:").split(":")
+                if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
+                    val map = lockedPermissions(ctx).toMutableMap()
+                    val perms = (map[parts[0]] ?: emptySet()) - parts[1]
+                    if (perms.isEmpty()) map.remove(parts[0]) else map[parts[0]] = perms
+                    saveLockedPermissions(ctx, map)
+                    AdminHelper.applyPermissionLocks(ctx)
+                }
+            }
+            action.startsWith("frp_change:") -> {
+                // v1.12.0: changing or clearing the FRP account is
+                // weakening (PIN + 24h) — the payload carries the new
+                // value, "EMPTY" meaning clear it entirely. E-mail
+                // addresses never contain ':', so the rest of the string
+                // is the payload verbatim.
+                val value = action.removePrefix("frp_change:")
+                setFrpEmail(ctx, if (value == "EMPTY") "" else value)
+                AdminHelper.applyFrpPolicy(ctx)
+            }
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -472,6 +519,164 @@ object Store {
     fun setNetworkLockApplied(ctx: Context, on: Boolean) =
         prefs(ctx).edit().putBoolean("network_lock_applied", on).apply()
 
+    // ---- v1.12.0: the all-in-one Device Owner batch ----
+    // Same split as v1.10/v1.11: DESIRED state here, verifiably-applied
+    // markers alongside, so the engine tick re-applies only on change and
+    // the owner-exit teardown can verify every artefact it must undo.
+
+    // -- Stage 1: keyguard + password hardening --
+    /** Lockscreen camera/widgets off, notification contents hidden on the
+     *  lock screen, device PIN quality raised, screen auto-lock ≤ 5 min.
+     *  Default ON (it only bites with Device Owner). Turning the
+     *  preference OFF is weakening ("keyguard_hardening_off"). */
+    fun keyguardHardeningOn(ctx: Context): Boolean =
+        prefs(ctx).getBoolean("keyguard_hardening_on", true)
+    fun setKeyguardHardeningOn(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("keyguard_hardening_on", on).apply()
+
+    /** Last keyguard-hardening state verifiably pushed to DPM;
+     *  null = never applied in this ownership (apply again). */
+    fun keyguardHardeningApplied(ctx: Context): Boolean? {
+        val p = prefs(ctx)
+        if (!p.contains("keyguard_hardening_applied")) return null
+        return p.getBoolean("keyguard_hardening_applied", false)
+    }
+
+    fun setKeyguardHardeningApplied(ctx: Context, on: Boolean?) {
+        val ed = prefs(ctx).edit()
+        if (on == null) ed.remove("keyguard_hardening_applied")
+        else ed.putBoolean("keyguard_hardening_applied", on)
+        ed.apply()
+    }
+
+    // -- Stage 2: account-modify block --
+    /** While ON (and owner), Google/other accounts cannot be added or
+     *  removed in Settings — DISALLOW_MODIFY_ACCOUNTS. Default ON.
+     *  Turning OFF is weakening ("account_block_off"). */
+    fun accountBlockOn(ctx: Context): Boolean =
+        prefs(ctx).getBoolean("account_block_on", true)
+    fun setAccountBlockOn(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("account_block_on", on).apply()
+
+    fun accountBlockApplied(ctx: Context): Boolean? {
+        val p = prefs(ctx)
+        if (!p.contains("account_block_applied")) return null
+        return p.getBoolean("account_block_applied", false)
+    }
+
+    fun setAccountBlockApplied(ctx: Context, on: Boolean?) {
+        val ed = prefs(ctx).edit()
+        if (on == null) ed.remove("account_block_applied")
+        else ed.putBoolean("account_block_applied", on)
+        ed.apply()
+    }
+
+    // -- Stage 3: hidden apps --
+    /** Apps hidden via setApplicationHidden (gone from launcher/app
+     *  lists while hidden). Adding is immediate; bringing one back is
+     *  weakening ("unhide_app:<pkg>"). */
+    fun hiddenApps(ctx: Context): Set<String> = getPkgSet(ctx, "hidden_apps")
+    fun saveHiddenApps(ctx: Context, set: Set<String>) = putPkgSet(ctx, "hidden_apps", set)
+
+    /** Packages verifiably hidden in DPM right now. */
+    fun hiddenAppsApplied(ctx: Context): Set<String> = getPkgSet(ctx, "hidden_apps_applied")
+    fun saveHiddenAppsApplied(ctx: Context, set: Set<String>) =
+        putPkgSet(ctx, "hidden_apps_applied", set)
+
+    // -- Stage 4: permission locks --
+    // Stored as rows "pkg|perm1,perm2" joined by ";" — package names and
+    // permission strings contain neither '|', ',' nor ';', so the form
+    // is exact and backup-safe.
+    private fun parsePermissionLocks(raw: String?): Map<String, Set<String>> =
+        (raw ?: "").split(";").filter { it.isNotBlank() }.mapNotNull { row ->
+            val p = row.split("|")
+            if (p.size != 2 || p[0].isBlank()) return@mapNotNull null
+            val perms = p[1].split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            if (perms.isEmpty()) null else p[0] to perms
+        }.toMap()
+
+    private fun serializePermissionLocks(map: Map<String, Set<String>>): String =
+        map.entries.filter { it.value.isNotEmpty() }
+            .joinToString(";") { "${it.key}|${it.value.sorted().joinToString(",")}" }
+
+    /** Permissions the user has locked DENIED for an app (owner-enforced:
+     *  the user cannot re-grant them in Settings while locked). Adding a
+     *  lock is immediate; removing one is weakening
+     *  ("permission_unlock:<pkg>:<perm>"). */
+    fun lockedPermissions(ctx: Context): Map<String, Set<String>> =
+        parsePermissionLocks(prefs(ctx).getString("locked_permissions", ""))
+
+    fun saveLockedPermissions(ctx: Context, map: Map<String, Set<String>>) =
+        prefs(ctx).edit().putString("locked_permissions", serializePermissionLocks(map)).apply()
+
+    /** The pkg->perms AdminHelper has verifiably pushed to DPM. */
+    fun lockedPermissionsApplied(ctx: Context): Map<String, Set<String>> =
+        parsePermissionLocks(prefs(ctx).getString("locked_permissions_applied", ""))
+
+    fun saveLockedPermissionsApplied(ctx: Context, map: Map<String, Set<String>>) =
+        prefs(ctx).edit().putString("locked_permissions_applied", serializePermissionLocks(map)).apply()
+
+    /** Backup form of the permission locks: one "pkg|perm1,perm2" string
+     *  per app (same encoding as the prefs value, as a JSON string list). */
+    fun lockedPermissionsRows(ctx: Context): List<String> =
+        lockedPermissions(ctx).entries.filter { it.value.isNotEmpty() }
+            .map { "${it.key}|${it.value.sorted().joinToString(",")}" }
+
+    fun saveLockedPermissionsRows(ctx: Context, rows: List<String>) =
+        saveLockedPermissions(ctx, parsePermissionLocks(rows.joinToString(";")))
+
+    // -- Stage 6: security + network logging state --
+    /** True once security + network logging have been verifiably enabled
+     *  in this ownership (teardown disables them again, best-effort). */
+    fun ownerLoggingApplied(ctx: Context): Boolean =
+        prefs(ctx).getBoolean("owner_logging_applied", false)
+    fun setOwnerLoggingApplied(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("owner_logging_applied", on).apply()
+
+    /** The batch token from the latest onNetworkLogsAvailable callback.
+     *  A batch can be retrieved exactly once with its token; -1 = no
+     *  batch has arrived yet. */
+    fun networkLogBatchToken(ctx: Context): Long =
+        prefs(ctx).getLong("network_log_batch_token", -1L)
+    fun setNetworkLogBatchToken(ctx: Context, token: Long) =
+        prefs(ctx).edit().putLong("network_log_batch_token", token).apply()
+
+    fun securityLogsAvailableAt(ctx: Context): Long =
+        prefs(ctx).getLong("security_logs_available_at", 0L)
+    fun setSecurityLogsAvailableAt(ctx: Context, ms: Long) =
+        prefs(ctx).edit().putLong("security_logs_available_at", ms).apply()
+
+    fun networkLogsAvailableAt(ctx: Context): Long =
+        prefs(ctx).getLong("network_logs_available_at", 0L)
+    fun setNetworkLogsAvailableAt(ctx: Context, ms: Long) =
+        prefs(ctx).edit().putLong("network_logs_available_at", ms).apply()
+
+    // -- Stage 7: Factory Reset Protection --
+    /** The Google account e-mail FRP is bound to. Deliberately EXCLUDED
+     *  from the settings backup (an account identifier — same spirit as
+     *  the PIN and the automation token, which never leave the phone in
+     *  a backup file). Changing/clearing it is weakening
+     *  ("frp_change:<email|EMPTY>"). */
+    fun frpEmail(ctx: Context): String = prefs(ctx).getString("frp_email", "") ?: ""
+    fun setFrpEmail(ctx: Context, email: String) =
+        prefs(ctx).edit().putString("frp_email", email.trim()).apply()
+
+    /** The FRP e-mail value verifiably pushed to DPM; null = never
+     *  applied in this ownership (apply again). An applied EMPTY string
+     *  (policy cleared) is a real applied state, distinct from null. */
+    fun frpAppliedEmail(ctx: Context): String? {
+        val p = prefs(ctx)
+        if (!p.contains("frp_applied_email")) return null
+        return p.getString("frp_applied_email", "")
+    }
+
+    fun setFrpAppliedEmail(ctx: Context, email: String?) {
+        val ed = prefs(ctx).edit()
+        if (email == null) ed.remove("frp_applied_email")
+        else ed.putString("frp_applied_email", email)
+        ed.apply()
+    }
+
     // ---- v1.8.0: persisted DND restore state ----
     // Engine's "DND was applied, restore this filter afterwards" state used
     // to live only in memory: if the process died mid-lock (XOS kills
@@ -562,6 +767,13 @@ object Store {
         o.put("uninstall_protected_pkgs", org.json.JSONArray(uninstallProtectedPkgs(ctx).toList()))
         o.put("dns_filter_on", dnsFilterOn(ctx))
         o.put("network_lock_on", networkLockOn(ctx))
+        // v1.12.0 batch. NOTE: frp_email is deliberately NOT exported —
+        // it is an account identifier, like the PIN and the automation
+        // token, which never leave the phone in a backup file.
+        o.put("keyguard_hardening_on", keyguardHardeningOn(ctx))
+        o.put("account_block_on", accountBlockOn(ctx))
+        o.put("hidden_apps", org.json.JSONArray(hiddenApps(ctx).toList()))
+        o.put("locked_permissions", org.json.JSONArray(lockedPermissionsRows(ctx)))
         return o.toString(2)
     }
 
@@ -604,6 +816,25 @@ object Store {
                 saveUninstallProtectedPkgs(ctx, list.filter {
                     it != ctx.packageName && !AdminHelper.isProtectedPackage(ctx, it)
                 }.toSet())
+            }
+            bool("keyguard_hardening_on")?.let { setKeyguardHardeningOn(ctx, it) }
+            bool("account_block_on")?.let { setAccountBlockOn(ctx, it) }
+            strings("hidden_apps")?.let { list ->
+                // Same exclusions as the picker: FocusLock itself and the
+                // system-critical packages are never hidden (hiding the
+                // launcher/dialer/Settings would strand the phone).
+                saveHiddenApps(ctx, list.filter {
+                    it != ctx.packageName && !AdminHelper.isProtectedPackage(ctx, it)
+                }.toSet())
+            }
+            strings("locked_permissions")?.let { rows ->
+                // Rows are validated by parsePermissionLocks; entries for
+                // FocusLock itself or protected packages are dropped, the
+                // same rule the picker and AdminHelper enforce.
+                val parsed = parsePermissionLocks(rows.joinToString(";"))
+                saveLockedPermissions(ctx, parsed.filterKeys {
+                    it != ctx.packageName && !AdminHelper.isProtectedPackage(ctx, it)
+                })
             }
             logTamper(ctx, "Settings restored from backup file")
             true

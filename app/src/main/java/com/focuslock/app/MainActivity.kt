@@ -195,6 +195,54 @@ class MainActivity : AppCompatActivity() {
 
     // ---- Tab 0: Home — minimal permissions, live state, statistics ----
     private fun tabHome(content: LinearLayout) {
+        // Screen-time summary is computed ONCE per Home build and shared
+        // by the hero card and the statistics card (it walks UsageStats —
+        // calling it twice per refresh was wasted work).
+        val usageAccess = AdminHelper.hasUsageAccess(this)
+        val usage = if (usageAccess) usageSummary() else (0L to emptyList())
+
+        // ---- v1.12.0 UI/UX: status hero — the phone's protection state
+        // at a glance: master switch + owner, live lock state with a
+        // focus progress bar, and today's headline numbers. ----
+        val heroCard = Ui.card(this)
+        heroCard.addView(Ui.cardTitle(this, "অবস্থা"))
+        val heroFocusEnd = Store.focusEndMs(this)
+        val heroNow = System.currentTimeMillis()
+        heroCard.addView(Ui.body(this,
+            "সুরক্ষা ${if (Store.isProtectionOn(this)) "চালু" else "বন্ধ"} · Device Owner " +
+                if (AdminHelper.isDeviceOwner(this)) "চালু" else "এখনো হয়নি"))
+        if (heroFocusEnd > heroNow) {
+            heroCard.addView(Ui.body(this, "ফোকাস চলছে — শেষ হবে ${timeText(heroFocusEnd)}").apply {
+                setTextColor(Ui.BRIGHT)
+                setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0)
+            })
+            val heroStart = Store.focusStartMs(this)
+            if (heroStart > 0 && heroStart < heroFocusEnd) {
+                val pct = ((heroNow - heroStart) * 100 / (heroFocusEnd - heroStart)).toInt()
+                heroCard.addView(Ui.progressBar(this, pct))
+            }
+        } else {
+            val heroSchedule = Blocker.activeSchedule(this)
+            if (heroSchedule != null) {
+                heroCard.addView(Ui.body(this, "শিডিউল লক চলছে — ${heroSchedule.label}").apply {
+                    setTextColor(Ui.BRIGHT)
+                    setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0)
+                })
+            } else {
+                heroCard.addView(Ui.secondary(this, "এখন কোনো লক চলছে না").apply {
+                    setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0)
+                })
+            }
+        }
+        heroCard.addView(Ui.secondary(this,
+            "আজকের ফোকাস: ${Store.focusMinutesToday(this)} মিনিট" +
+                if (usageAccess) " · আজকের স্ক্রিন টাইম: ${durText(usage.first)}" else ""))
+        val streak = Store.focusStreakDays(this)
+        if (streak > 0) {
+            heroCard.addView(Ui.secondary(this, "টানা ধারা (স্ট্রিক): $streak দিন"))
+        }
+        content.addView(heroCard)
+
         // Minimized (Tamim's request): only the 3 permissions the app truly
         // needs day-to-day. Device Owner belongs to Stage B and lives in
         // Settings; optional features ask for their permission only when used.
@@ -236,8 +284,8 @@ class MainActivity : AppCompatActivity() {
         // ---- Statistics & report (Tamim: keep it on Home) ----
         val statsCard = Ui.card(this)
         statsCard.addView(Ui.cardTitle(this, "আজকের হিসাব"))
-        if (AdminHelper.hasUsageAccess(this)) {
-            val (totalMs, top) = usageSummary()
+        if (usageAccess) {
+            val (totalMs, top) = usage
             statsCard.addView(Ui.body(this, "মোট স্ক্রিন টাইম: ${durText(totalMs)}"))
             for ((label, ms) in top) {
                 statsCard.addView(Ui.secondary(this, "$label — ${durText(ms)}"))
@@ -301,11 +349,17 @@ class MainActivity : AppCompatActivity() {
             if (preset.isEmpty()) "স্টাডি অ্যাপ বাছাই করা নেই — ফোকাসে পুরো ফোন লক থাকবে।"
             else "বাছাই করা: " + preset.sorted().joinToString(", ") { appLabel(it) }
         ).apply { setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) })
-        Store.focusEndMs(this).takeIf { it > System.currentTimeMillis() }?.let {
-            focusCard.addView(Ui.body(this, "ফোকাস চলছে, শেষ হবে: ${timeText(it)}").apply {
+        Store.focusEndMs(this).takeIf { it > System.currentTimeMillis() }?.let { end ->
+            focusCard.addView(Ui.body(this, "ফোকাস চলছে, শেষ হবে: ${timeText(end)}").apply {
                 setTextColor(Ui.BRIGHT)
                 setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0)
             })
+            // v1.12.0 UI/UX: elapsed-progress of the running session.
+            val startMs = Store.focusStartMs(this)
+            if (startMs > 0 && startMs < end) {
+                val pct = ((System.currentTimeMillis() - startMs) * 100 / (end - startMs)).toInt()
+                focusCard.addView(Ui.progressBar(this, pct))
+            }
         }
         content.addView(focusCard)
 
@@ -440,6 +494,27 @@ class MainActivity : AppCompatActivity() {
             )
         )
         siteCard.addView(Ui.secondary(this, "চালু থাকলে Chrome নিজেই ব্লক/Allow তালিকা মানে — ইনকগনিটো বন্ধ থাকে, SafeSearch জোর করে চালু থাকে।"))
+        // ---- v1.12.0 Stage 5: wipe Chrome's data (Device Owner) ----
+        // A reset action, not a weakening — but it destroys his Chrome
+        // logins, so it is confirm + PIN gated and says so plainly.
+        siteCard.addView(Ui.secondaryButton(this, "Chrome-এর সব ডেটা মুছো (কুকি/হিস্ট্রি/লগইন)") {
+            AlertDialog.Builder(this)
+                .setTitle("Chrome-এর সব ডেটা মুছবে?")
+                .setMessage("Chrome-এর কুকি, হিস্ট্রি, ক্যাশ আর সেভ করা লগইন — সব মুছে যাবে। সব সাইট থেকে লগআউট হয়ে যাবে, আবার লগইন করতে হবে। এটা ফেরানো যাবে না।")
+                .setPositiveButton("মুছো") { _, _ ->
+                    verifyPin {
+                        if (AdminHelper.isDeviceOwner(this)) {
+                            AdminHelper.clearChromeData(this) { ok ->
+                                Store.logTamper(this, "Chrome data clear requested, success=$ok")
+                                toast(if (ok) "Chrome-এর ডেটা মোছা হয়েছে" else "ডেটা মোছা যায়নি — আবার চেষ্টা করো")
+                            }
+                        } else {
+                            toast("এটা করতে Device Owner লাগবে — Owner চালু হলে আবার চেষ্টা করো")
+                        }
+                    }
+                }
+                .setNegativeButton("বাতিল", null).show()
+        })
         val sites = Store.blockedSites(this)
         if (sites.isEmpty()) {
             siteCard.addView(Ui.secondary(this, "কোনো সাইট ব্লক করা নেই।"))
@@ -621,6 +696,19 @@ class MainActivity : AppCompatActivity() {
             })
         }
         permCard.addView(Ui.statusRow(this, "Device Owner (Stage B)", AdminHelper.isDeviceOwner(this)))
+        // v1.12.0 UI/UX: one-glance progress over the six checks above.
+        val permChecks = listOf(
+            AdminHelper.isAccessibilityOn(this),
+            AdminHelper.hasUsageAccess(this),
+            AdminHelper.hasOverlayPermission(this),
+            nm.isNotificationPolicyAccessGranted,
+            AdminHelper.isAdminActive(this),
+            AdminHelper.isDeviceOwner(this)
+        )
+        val permDone = permChecks.count { it }
+        permCard.addView(Ui.gap(this, 6))
+        permCard.addView(Ui.secondary(this, "$permDone/${permChecks.size} অনুমতি চালু"))
+        permCard.addView(Ui.progressBar(this, permDone * 100 / permChecks.size))
         content.addView(permCard)
 
         // ---- v1.8.0: Device Owner activation guide (Dhizuku-style setup) ----
@@ -721,6 +809,63 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
+        // ---- v1.12.0 Stage 2: account-modify block ----
+        // (ownerActive is declared further down at the install card;
+        // this card reads the owner state directly.)
+        val ownerNow = AdminHelper.isDeviceOwner(this)
+        securityCard.addView(Ui.gap(this, 8))
+        val accountBlock = Store.accountBlockOn(this)
+        securityCard.addView(Ui.statusRow(this, "অ্যাকাউন্ট যোগ/মোছা ব্লক (Device Owner)", accountBlock))
+        securityCard.addView(Ui.secondary(this,
+            "চালু থাকলে Settings থেকে Google বা অন্য কোনো অ্যাকাউন্ট যোগ করা বা মোছা যাবে না। অ্যাপের ভেতরের লগইন আগের মতোই চলবে।" +
+                if (!ownerNow) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+        if (!accountBlock) {
+            securityCard.addView(Ui.primaryButton(this, "অ্যাকাউন্ট ব্লক চালু করো") {
+                Store.setAccountBlockOn(this, true)
+                AdminHelper.applyAccountBlock(this)
+                Store.logTamper(this, "Account-modify block turned ON")
+                toast(if (ownerNow) "অ্যাকাউন্ট ব্লক চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
+                buildUi()
+            })
+        } else {
+            securityCard.addView(Ui.secondaryButton(this, "অ্যাকাউন্ট ব্লক বন্ধ করার আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("account_block_off", "অ্যাকাউন্ট ব্লক বন্ধ করা")
+                }
+            })
+        }
+
+        // ---- v1.12.0 Stage 7: Factory Reset Protection ----
+        securityCard.addView(Ui.gap(this, 8))
+        securityCard.addView(Ui.body(this, "Factory Reset Protection (Device Owner)"))
+        val frpEmail = Store.frpEmail(this)
+        securityCard.addView(Ui.secondary(this,
+            if (frpEmail.isBlank()) {
+                "FRP বসানো নেই। ইমেইল বসালে recovery mode থেকে ফ্যাক্টরি রিসেট করার পরেও ফোন সেটআপের সময় এই Google অ্যাকাউন্টে সাইন-ইন চাইবে — অ্যাকাউন্ট ছাড়া ফোন সেটআপ হবে না। সাবধান: ভুল বা অন্য কারো ইমেইল দিলে রিসেটের পর নিজের ফোনেই আটকে যাবে।"
+            } else {
+                "FRP অ্যাকাউন্ট: $frpEmail — recovery mode থেকে রিসেট করার পরেও এই অ্যাকাউন্ট ছাড়া ফোন সেটআপ হবে না।"
+            } + if (!ownerNow) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+        if (frpEmail.isBlank()) {
+            securityCard.addView(Ui.secondaryButton(this, "FRP ইমেইল বসাও") { frpEmailFlow(frpChange = false) })
+        } else {
+            securityCard.addView(Ui.secondaryButton(this, "FRP ইমেইল বদলাও (24 ঘণ্টা লাগবে)") {
+                verifyPin { frpEmailFlow(frpChange = true) }
+            })
+            securityCard.addView(Ui.secondaryButton(this, "FRP মুছে দাও (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("frp_change:EMPTY", "Factory Reset Protection মোছা")
+                }
+            })
+        }
+
+        // ---- v1.12.0 Stage 6: security / network logs (tamper evidence) ----
+        securityCard.addView(Ui.gap(this, 8))
+        securityCard.addView(Ui.body(this, "লগ (Device Owner)"))
+        securityCard.addView(Ui.secondary(this,
+            if (ownerNow) "Device Owner চালু থাকলে Android নিজে নিরাপত্তা ও নেটওয়ার্ক লগ রাখে — লক স্ক্রিন খোলার চেষ্টা, ADB ব্যবহার, কোন হোস্টে সংযোগ হয়েছে ইত্যাদির প্রমাণ।"
+            else "লগ দেখতে Device Owner লাগবে — Owner চালু হলে Android নিজে এই লগ রাখা শুরু করবে।"))
+        securityCard.addView(Ui.secondaryButton(this, "Security log দেখো") { showSecurityLogs() })
+        securityCard.addView(Ui.secondaryButton(this, "Network log সারাংশ") { showNetworkLogSummary() })
         securityCard.addView(Ui.secondaryButton(this, "ADB কমান্ড কপি করো (Stage B-এর জন্য)") {
             val cmd = "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -889,6 +1034,104 @@ class MainActivity : AppCompatActivity() {
             })
         }
         content.addView(netCard)
+
+        // ---- v1.12.0 Stage 1: keyguard + password hardening ----
+        // Standing policies while the flag is ON (default): lockscreen
+        // camera/widgets off, notification contents hidden on the lock
+        // screen, device-PIN quality raised (bites at his NEXT PIN
+        // change), screen auto-lock within 5 minutes. OFF = weakening
+        // (PIN + 24h pending: keyguard_hardening_off). Without Device
+        // Owner the choice still saves and the card says so plainly.
+        val keyguardCard = Ui.card(this)
+        keyguardCard.addView(Ui.cardTitle(this, "লক স্ক্রিন ও পাসওয়ার্ড (Device Owner)"))
+        val keyguardOn = Store.keyguardHardeningOn(this)
+        keyguardCard.addView(Ui.statusRow(this, "লক স্ক্রিন হার্ডেনিং", keyguardOn))
+        keyguardCard.addView(Ui.secondary(this,
+            "চালু থাকলে: লক স্ক্রিনে ক্যামেরা ও উইজেট বন্ধ থাকে, লক স্ক্রিনে নোটিফিকেশনের লেখা লুকানো থাকে, ডিভাইস PIN কমপক্ষে ৬ সংখ্যার জটিল হতে হবে (পরের বার PIN বদলানোর সময় থেকে কার্যকর), আর স্ক্রিন নিভলে ৫ মিনিটের মধ্যে অটো-লক হবে।" +
+                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে — এখন পছন্দটা শুধু সংরক্ষিত থাকবে।" else ""))
+        if (!keyguardOn) {
+            keyguardCard.addView(Ui.primaryButton(this, "হার্ডেনিং চালু করো") {
+                Store.setKeyguardHardeningOn(this, true)
+                AdminHelper.applyKeyguardHardening(this)
+                Store.logTamper(this, "Keyguard hardening turned ON")
+                toast(if (ownerActive) "লক স্ক্রিন হার্ডেনিং চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
+                buildUi()
+            })
+        } else {
+            keyguardCard.addView(Ui.secondaryButton(this, "হার্ডেনিং বন্ধ করার আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("keyguard_hardening_off", "লক স্ক্রিন হার্ডেনিং বন্ধ করা")
+                }
+            })
+        }
+        content.addView(keyguardCard)
+
+        // ---- v1.12.0 Stage 3: hide distracting apps ----
+        // setApplicationHidden makes an app vanish from the launcher and
+        // app lists while hidden. Adding is immediate; bringing one back
+        // is weakening ("unhide_app:<pkg>"). FocusLock itself and the
+        // system-critical packages are never offered (same exclusions as
+        // AdminHelper enforces when applying).
+        val hiddenCard = Ui.card(this)
+        hiddenCard.addView(Ui.cardTitle(this, "অ্যাপ লুকিয়ে রাখা (Device Owner)"))
+        hiddenCard.addView(Ui.secondary(this,
+            "লুকানো অ্যাপ launcher ও অ্যাপ তালিকা থেকে অদৃশ্য হয়ে যায় — খোলাই যায় না।" +
+                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে — এখন পছন্দগুলো শুধু সংরক্ষিত থাকবে।" else ""))
+        val hiddenPkgs = Store.hiddenApps(this).sorted()
+        if (hiddenPkgs.isEmpty()) {
+            hiddenCard.addView(Ui.secondary(this, "কোনো অ্যাপ লুকানো নেই।"))
+        } else {
+            for (pkg in hiddenPkgs) {
+                val label = appLabel(pkg)
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+                }
+                row.addView(TextView(this).apply {
+                    text = label
+                    textSize = 14f; setTextColor(Ui.TEXT)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(Button(this).apply {
+                    text = "ফিরিয়ে আনো"; isAllCaps = false; textSize = 12f
+                    setTextColor(Ui.MUTED)
+                    background = RowButtonStyle.raised(this@MainActivity)
+                    setOnClickListener {
+                        verifyPin { requestWeakening("unhide_app:$pkg", "$label ফিরিয়ে আনা") }
+                    }
+                })
+                hiddenCard.addView(row)
+            }
+        }
+        hiddenCard.addView(Ui.secondaryButton(this, "লুকানোর জন্য অ্যাপ যোগ করো") {
+            val already = Store.hiddenApps(this)
+            val apps = pickerApps().filter {
+                !AdminHelper.isProtectedPackage(this, it.first) && it.first !in already
+            }
+            if (apps.isEmpty()) {
+                toast("লুকানোর মতো কোনো অ্যাপ পাওয়া যায়নি")
+            } else {
+                val pkgs = apps.map { it.first }
+                val checked = BooleanArray(apps.size) { false }
+                AlertDialog.Builder(this).setTitle("কোন অ্যাপগুলো লুকিয়ে রাখবে?")
+                    .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, isChecked ->
+                        checked[i] = isChecked
+                    }
+                    .setPositiveButton("লুকিয়ে রাখো") { _, _ ->
+                        val selected = pkgs.filterIndexed { i, _ -> checked[i] }.toSet()
+                        if (selected.isNotEmpty()) {
+                            Store.saveHiddenApps(this, already + selected)
+                            AdminHelper.applyHiddenApps(this)
+                            Store.logTamper(this, "Apps hidden: ${selected.joinToString()}")
+                            toast("${selected.size}টি অ্যাপ লুকানো হয়েছে")
+                            buildUi()
+                        }
+                    }
+                    .setNegativeButton("বাতিল", null).show()
+            }
+        })
+        content.addView(hiddenCard)
 
         // ---- Automation API (v1.6.0, PhoneLink) ----
         val autoCard = Ui.card(this)
@@ -1179,6 +1422,15 @@ class MainActivity : AppCompatActivity() {
                 }
             })
             card.addView(row)
+            // ---- v1.12.0 Stage 4: permission locks for this app ----
+            val locks = Store.lockedPermissions(this)[limit.pkg] ?: emptySet()
+            if (locks.isNotEmpty()) {
+                card.addView(Ui.secondary(this,
+                    "তালা দেওয়া পারমিশন: " + locks.sorted().joinToString(", ") { permissionShortName(it) }))
+            }
+            card.addView(Ui.secondaryButton(this, "পারমিশন তালা: $label") {
+                permissionLockFlow(limit.pkg, label)
+            })
         }
     }
 
@@ -1276,6 +1528,190 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("বাতিল", null).show()
     }
 
+    // ---- v1.12.0 Stage 4: permission locks ----
+
+    /** The dangerous permissions this feature will lock — the ones that
+     *  matter for privacy and strictness. The picker intersects this set
+     *  with the permissions the target app itself actually requested. */
+    private val dangerousPermissions = setOf(
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_SMS",
+        "android.permission.SEND_SMS",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.BODY_SENSORS",
+        "android.permission.ACTIVITY_RECOGNITION"
+    )
+
+    private fun permissionShortName(perm: String): String =
+        perm.removePrefix("android.permission.")
+
+    private fun dangerousRequestedPermissions(pkg: String): List<String> = try {
+        val info = packageManager.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS)
+        (info.requestedPermissions?.toList() ?: emptyList()).filter { it in dangerousPermissions }
+    } catch (e: Exception) { emptyList() }
+
+    private fun permissionLockFlow(pkg: String, label: String) {
+        val offered = dangerousRequestedPermissions(pkg)
+        if (offered.isEmpty()) {
+            toast("এই অ্যাপটা তালা দেওয়ার মতো কোনো বিপজ্জনক পারমিশন চায়নি")
+            return
+        }
+        if (!AdminHelper.isDeviceOwner(this)) {
+            toast("পারমিশন তালা Device Owner চালু হলেই কার্যকর হবে — পছন্দটা সেভ হয়ে থাকবে")
+        }
+        val lockedNow = Store.lockedPermissions(this)[pkg] ?: emptySet()
+        val checked = BooleanArray(offered.size) { i -> offered[i] in lockedNow }
+        AlertDialog.Builder(this).setTitle("$label — পারমিশন তালা")
+            .setMessage("টিক দেওয়া পারমিশন অ্যাপটা পাবে না, আর Device Owner থাকলে Settings থেকেও চালু করা যাবে না। তালা তোলা দুর্বলীকরণ — PIN + 24 ঘণ্টা লাগে, একবারে একটা করে।")
+            .setMultiChoiceItems(offered.map { permissionShortName(it) }.toTypedArray(), checked) { _, i, isChecked ->
+                checked[i] = isChecked
+            }
+            .setPositiveButton("ঠিক আছে") { _, _ ->
+                val chosen = offered.filterIndexed { i, _ -> checked[i] }.toSet()
+                val additions = chosen - lockedNow
+                val removals = (lockedNow - chosen).sorted()
+                if (additions.isNotEmpty()) {
+                    val map = Store.lockedPermissions(this).toMutableMap()
+                    map[pkg] = (map[pkg] ?: emptySet()) + additions
+                    Store.saveLockedPermissions(this, map)
+                    AdminHelper.applyPermissionLocks(this)
+                    Store.logTamper(this, "Permission locks added for $pkg: ${additions.joinToString()}")
+                    toast("পারমিশন তালা বসানো হয়েছে")
+                    buildUi()
+                }
+                if (removals.isNotEmpty()) {
+                    // One weakening at a time: the pending slot is global
+                    // (the rule for every weakening in this app). The
+                    // others stay locked and can be requested afterwards.
+                    val first = removals.first()
+                    if (removals.size > 1) {
+                        toast("তালা তোলা একবারে একটা করে হয় — বাকি ${removals.size - 1}টা পরে আবার চেষ্টা করো")
+                    }
+                    verifyPin {
+                        requestWeakening(
+                            "permission_unlock:$pkg:$first",
+                            "$label-এর পারমিশন তালা তোলা: ${permissionShortName(first)}"
+                        )
+                    }
+                }
+                if (additions.isEmpty() && removals.isEmpty()) {
+                    toast("কোনো বদল হয়নি")
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
+    }
+
+    // ---- v1.12.0 Stage 7: FRP e-mail flow ----
+
+    /** Setting the FRP account the first time is strengthening
+     *  (immediate). Changing it goes through the PIN + 24h pending the
+     *  caller already queued verifyPin for — this flow only collects the
+     *  new value and files the "frp_change:<email>" request. */
+    private fun frpEmailFlow(frpChange: Boolean) {
+        val input = EditText(this).apply {
+            hint = "তোমার নিজের Google অ্যাকাউন্টের ইমেইল"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setText(Store.frpEmail(this@MainActivity))
+        }
+        AlertDialog.Builder(this).setTitle("Factory Reset Protection").setView(input)
+            .setMessage("সাবধান: ভুল বা অন্য কারো ইমেইল দিলে ফ্যাক্টরি রিসেটের পর ফোন ওই অ্যাকাউন্ট ছাড়া সেটআপ হবে না — নিজের ফোনেই আটকে যাবে। শুধু নিজের Google অ্যাকাউন্টের ইমেইল দাও।")
+            .setPositiveButton("সেভ") { _, _ ->
+                val email = input.text.toString().trim().lowercase()
+                if (email.isBlank() || !email.contains("@") || !email.contains(".")) {
+                    toast("ঠিকমতো ইমেইল দাও")
+                } else if (frpChange) {
+                    requestWeakening("frp_change:$email", "FRP ইমেইল বদলানো")
+                } else {
+                    Store.setFrpEmail(this, email)
+                    AdminHelper.applyFrpPolicy(this)
+                    Store.logTamper(this, "FRP account set")
+                    toast("FRP ইমেইল সেভ হয়েছে")
+                    buildUi()
+                }
+            }
+            .setNegativeButton("বাতিল", null).show()
+    }
+
+    // ---- v1.12.0 Stage 6: log viewers ----
+
+    private fun showSecurityLogs() {
+        if (!AdminHelper.isDeviceOwner(this)) {
+            toast("Security log দেখতে Device Owner লাগবে")
+            return
+        }
+        val result = AdminHelper.securityLogLines(this)
+        if (result == null) {
+            toast("লগ পড়া যায়নি — আবার চেষ্টা করো")
+            return
+        }
+        val (total, lines) = result
+        Store.logTamper(this, "Security log viewed: $total events buffered")
+        val text = if (lines.isEmpty()) {
+            "এখনো কোনো লগ জমা হয়নি — লগ batch আকারে আসে, কিছু সময় পর আবার দেখো।"
+        } else {
+            "মোট $total টি ইভেন্ট আছে। শেষ ${lines.size}টি:\n\n" + lines.joinToString("\n")
+        }
+        showScrollableDialog("Security log", text)
+    }
+
+    private fun showNetworkLogSummary() {
+        if (!AdminHelper.isDeviceOwner(this)) {
+            toast("Network log দেখতে Device Owner লাগবে")
+            return
+        }
+        if (Store.networkLogBatchToken(this) < 0) {
+            showScrollableDialog(
+                "Network log সারাংশ",
+                "এখনো কোনো network log batch আসেনি। লগ batch আকারে আসে — কিছুক্ষণ ইন্টারনেট ব্যবহারের পর আবার দেখো।"
+            )
+            return
+        }
+        val result = AdminHelper.networkLogSummary(this)
+        if (result == null) {
+            toast("লগ পড়া যায়নি — আবার চেষ্টা করো")
+            return
+        }
+        val (total, distinct, hosts) = result
+        Store.logTamper(this, "Network log summary viewed: $total events, $distinct hosts")
+        val text = if (total == 0) {
+            "এই batch-এ কোনো ইভেন্ট ছিল না।"
+        } else {
+            "এই batch-এ মোট $total টি নেটওয়ার্ক ইভেন্ট, আলাদা হোস্ট $distinct টি। " +
+                "(একটা batch একবারই পড়া যায় — এই batch-টা এখন খরচ হয়ে গেছে।)\n\n" +
+                hosts.joinToString("\n")
+        }
+        showScrollableDialog("Network log সারাংশ", text)
+    }
+
+    /** Long text in a scrollable dialog, in the design-system styling. */
+    private fun showScrollableDialog(title: String, text: String) {
+        val tv = TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setTextColor(Ui.TEXT)
+            setPadding(
+                Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 12),
+                Ui.dp(this@MainActivity, 20), Ui.dp(this@MainActivity, 4)
+            )
+        }
+        val scroll = ScrollView(this).apply {
+            addView(tv)
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.55).toInt()
+            )
+        }
+        AlertDialog.Builder(this).setTitle(title).setView(scroll)
+            .setPositiveButton("বন্ধ করো", null).show()
+    }
+
     private fun verifyPin(then: () -> Unit) {
         if (!Store.hasPin(this)) {
             toast("আগে PIN সেট করতে হবে")
@@ -1324,6 +1760,20 @@ class MainActivity : AppCompatActivity() {
         action == "install_block_off" -> "ইনস্টল ব্লক বন্ধ করা"
         action == "dns_filter_off" -> "DNS ফিল্টার বন্ধ করা"
         action == "network_lock_off" -> "নেটওয়ার্ক লক বন্ধ করা"
+        action == "keyguard_hardening_off" -> "লক স্ক্রিন হার্ডেনিং বন্ধ করা"
+        action == "account_block_off" -> "অ্যাকাউন্ট ব্লক বন্ধ করা"
+        action.startsWith("unhide_app:") ->
+            "অ্যাপ ফিরিয়ে আনা: ${appLabel(action.removePrefix("unhide_app:"))}"
+        action.startsWith("permission_unlock:") -> {
+            val parts = action.removePrefix("permission_unlock:").split(":")
+            if (parts.size == 2) "পারমিশন তালা তোলা: ${appLabel(parts[0])} — ${permissionShortName(parts[1])}"
+            else "পারমিশন তালা তোলা"
+        }
+        action.startsWith("frp_change:") -> {
+            val value = action.removePrefix("frp_change:")
+            if (value == "EMPTY") "Factory Reset Protection মোছা"
+            else "FRP ইমেইল বদলানো: $value"
+        }
         action.startsWith("uninstall_unprotect:") ->
             "আনইনস্টল-সুরক্ষা তোলা: ${appLabel(action.removePrefix("uninstall_unprotect:"))}"
         action.startsWith("delete_schedule:") -> "শিডিউল মোছা"

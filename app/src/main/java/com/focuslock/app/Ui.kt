@@ -69,12 +69,22 @@ object Ui {
         this.text = text; textSize = 12f; setTextColor(MUTED)
     }
 
+    /** v1.12.0 UI/UX: a light haptic tick on tap, guarded — feedback is
+     *  a nicety, never a failure path. Shared by both button styles. */
+    private fun View.hapticTick() {
+        try {
+            performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+        } catch (_: Throwable) { }
+    }
+
     fun primaryButton(ctx: Context, text: String, onClick: () -> Unit) = Button(ctx).apply {
         this.text = text; textSize = 14f; isAllCaps = false
         setTextColor(BG)
         typeface = Typeface.create("sans-serif", Typeface.BOLD)
         background = rounded(ctx, ACCENT, 14)
-        setOnClickListener { onClick() }
+        // v1.12.0 UI/UX: 48dp minimum touch target + haptic tick.
+        minHeight = dp(ctx, 48)
+        setOnClickListener { hapticTick(); onClick() }
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(ctx, 8) }
@@ -84,7 +94,9 @@ object Ui {
         this.text = text; textSize = 14f; isAllCaps = false
         setTextColor(TEXT)
         background = rounded(ctx, RAISED, 14, stroke = true)
-        setOnClickListener { onClick() }
+        // v1.12.0 UI/UX: 48dp minimum touch target + haptic tick.
+        minHeight = dp(ctx, 48)
+        setOnClickListener { hapticTick(); onClick() }
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(ctx, 8) }
@@ -102,6 +114,42 @@ object Ui {
             background = rounded(ctx, RAISED, 999, stroke = true)
         }
         setPadding(dp(ctx, 10), dp(ctx, 4), dp(ctx, 10), dp(ctx, 4))
+        // v1.12.0 UI/UX: consistent chip height (~32dp), same look.
+        minHeight = dp(ctx, 32)
+        gravity = android.view.Gravity.CENTER
+    }
+
+    /**
+     * v1.12.0 UI/UX: a slim progress bar built from plain Views in the
+     * design-system palette — track RAISED with hairline stroke, fill
+     * ACCENT, 8dp tall, fully rounded. [percent] is clamped to 0..100.
+     * (A stock ProgressBar widget fights the flat bento styling; this
+     * cannot drift off-palette.)
+     */
+    fun progressBar(ctx: Context, percent: Int): LinearLayout {
+        val p = percent.coerceIn(0, 100)
+        val track = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(ctx, RAISED, 999, stroke = true)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(ctx, 8)
+            ).apply {
+                topMargin = dp(ctx, 6)
+                bottomMargin = dp(ctx, 4)
+            }
+        }
+        if (p > 0) {
+            track.addView(View(ctx).apply {
+                background = rounded(ctx, ACCENT, 999)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, p.toFloat())
+            })
+        }
+        if (p < 100) {
+            track.addView(View(ctx).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (100 - p).toFloat())
+            })
+        }
+        return track
     }
 
     /** One status row: name on the left, chip on the right. */

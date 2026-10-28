@@ -81,6 +81,17 @@ object AdminHelper {
         // (forced re-apply; the network-settings lock is NOT a standing
         // policy — it follows the live lock state in Engine's tick).
         applyDnsFilter(ctx, force = true)
+        // v1.12.0: the all-in-one batch — keyguard/password hardening,
+        // the account-modify block, hidden apps, permission locks, the
+        // FRP policy, and security/network logging. All forced here;
+        // each is marker-guarded on the per-tick path, and every one
+        // no-ops without Device Owner.
+        applyKeyguardHardening(ctx, force = true)
+        applyAccountBlock(ctx, force = true)
+        applyHiddenApps(ctx, force = true)
+        applyPermissionLocks(ctx, force = true)
+        applyFrpPolicy(ctx, force = true)
+        applyOwnerLogging(ctx)
     }
 
     /**
@@ -419,6 +430,423 @@ object AdminHelper {
         }
     }
 
+    // ---- v1.12.0: the all-in-one Device Owner batch ----
+    // Every function below follows the house pattern: no-op without
+    // Device Owner, desired state in Store, verifiably-applied markers
+    // in Store, try/catch(Throwable) + tamper log on every path, and a
+    // matching verified undo in safelyRemoveDeviceOwner.
+
+    // -- Stage 1: keyguard + password hardening --
+
+    /**
+     * Keyguard & password hardening while [Store.keyguardHardeningOn]:
+     * lockscreen camera and widgets off, notification contents hidden on
+     * the lock screen (unredacted notifications disabled), the device PIN
+     * must be numeric-complex with at least 6 digits (this only bites when
+     * Tamim next CHANGES his device PIN — Android never forces a change
+     * by itself), and the screen auto-locks within 5 minutes of going off.
+     * OFF resets all four policies to the platform defaults. The applied
+     * marker is written only after the DPM calls succeed, exactly like
+     * the install block — a failure retries on the next tick.
+     */
+    fun applyKeyguardHardening(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = Store.keyguardHardeningOn(ctx)
+            if (!force && Store.keyguardHardeningApplied(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            if (want) {
+                dpm.setKeyguardDisabledFeatures(
+                    admin,
+                    DevicePolicyManager.KEYGUARD_DISABLE_CAMERA or
+                        DevicePolicyManager.KEYGUARD_DISABLE_WIDGETS_ALL or
+                        DevicePolicyManager.KEYGUARD_DISABLE_UNREDACTED_NOTIFICATIONS
+                )
+                // The three password/screen policies are individually
+                // guarded: an OEM quirk in one must not block the others
+                // or the marker (the keyguard features above are the core).
+                try {
+                    dpm.setPasswordQuality(admin, DevicePolicyManager.PASSWORD_QUALITY_NUMERIC_COMPLEX)
+                } catch (e: Throwable) {
+                    Store.logTamper(ctx, "setPasswordQuality failed: ${e.message}")
+                }
+                try { dpm.setPasswordMinimumLength(admin, 6) } catch (e: Throwable) {
+                    Store.logTamper(ctx, "setPasswordMinimumLength failed: ${e.message}")
+                }
+                try { dpm.setMaximumTimeToLock(admin, 300_000L) } catch (e: Throwable) {
+                    Store.logTamper(ctx, "setMaximumTimeToLock failed: ${e.message}")
+                }
+            } else {
+                dpm.setKeyguardDisabledFeatures(admin, DevicePolicyManager.KEYGUARD_DISABLE_FEATURES_NONE)
+                try {
+                    dpm.setPasswordQuality(admin, DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED)
+                } catch (_: Throwable) { }
+                try { dpm.setPasswordMinimumLength(admin, 0) } catch (_: Throwable) { }
+                try { dpm.setMaximumTimeToLock(admin, 0L) } catch (_: Throwable) { }
+            }
+            Store.setKeyguardHardeningApplied(ctx, want)
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyKeyguardHardening failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    // -- Stage 2: account-modify block --
+
+    /**
+     * Account-modify block while [Store.accountBlockOn]: the user cannot
+     * add or remove accounts (Google or any other) in Settings —
+     * DISALLOW_MODIFY_ACCOUNTS. In-app sign-in inside apps keeps working;
+     * only system-level account management is closed. Same verified
+     * marker pattern as the install block.
+     */
+    fun applyAccountBlock(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = Store.accountBlockOn(ctx)
+            if (!force && Store.accountBlockApplied(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            if (want) {
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS)
+            } else {
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS)
+            }
+            Store.setAccountBlockApplied(ctx, want)
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyAccountBlock failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    // -- Stage 3: hidden apps --
+
+    /**
+     * Hidden apps: every package in [Store.hiddenApps] is hidden via
+     * setApplicationHidden — gone from the launcher and app lists, and it
+     * cannot be launched while hidden. Only the DIFF against the
+     * verifiably-applied set is pushed, each push read back with
+     * isApplicationHidden before it counts as applied (the uninstall-
+     * protection pattern). Hidden packages also join the managed ledger,
+     * so the emergency exit restores them through its Stage 4 as well as
+     * its dedicated Stage 3e. FocusLock itself and the system-critical
+     * packages are excluded here exactly as in the picker and the backup
+     * import — hiding the launcher/dialer/Settings would strand the phone.
+     */
+    fun applyHiddenApps(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val desired = Store.hiddenApps(ctx)
+                .filter { it != ctx.packageName && !isProtectedPackage(ctx, it) }
+                .toSet()
+            var applied = Store.hiddenAppsApplied(ctx)
+            // Restore apps that are no longer in the desired set (their
+            // unhide only lands here after the PIN + 24h pending).
+            for (pkg in (applied - desired).toList()) {
+                if (setHiddenVerified(ctx, dpm, admin, pkg, false)) {
+                    applied = applied - pkg
+                    try { Store.ledgerRemove(ctx, pkg) } catch (_: Throwable) { }
+                }
+            }
+            val toHide = if (force) desired else desired - applied
+            for (pkg in toHide) {
+                if (setHiddenVerified(ctx, dpm, admin, pkg, true)) {
+                    applied = applied + pkg
+                    try { Store.ledgerAdd(ctx, pkg) } catch (_: Throwable) { }
+                }
+            }
+            if (applied != Store.hiddenAppsApplied(ctx)) {
+                Store.saveHiddenAppsApplied(ctx, applied)
+            }
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyHiddenApps failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /** setApplicationHidden + read-back verification. A package that is
+     *  no longer installed holds no hidden state, so it counts as done
+     *  either way instead of retrying forever (same rule as uninstall). */
+    private fun setHiddenVerified(
+        ctx: Context,
+        dpm: DevicePolicyManager,
+        admin: ComponentName,
+        pkg: String,
+        hidden: Boolean
+    ): Boolean {
+        if (!isPackageInstalled(ctx, pkg)) return true
+        return try {
+            dpm.setApplicationHidden(admin, pkg, hidden)
+            dpm.isApplicationHidden(admin, pkg) == hidden
+        } catch (e: Throwable) {
+            try {
+                Store.logTamper(ctx, "setApplicationHidden($pkg, $hidden) failed: ${e.message}")
+            } catch (_: Throwable) { }
+            false
+        }
+    }
+
+    // -- Stage 4: permission locks --
+
+    /**
+     * Permission locks: for each pkg -> perms in
+     * [Store.lockedPermissions], the grant state is forced to DENIED via
+     * setPermissionGrantState. While a permission is locked DENIED the
+     * user CANNOT re-grant it in Settings — that is the lock. Only the
+     * DIFF against the verifiably-applied map is pushed; unlocking (after
+     * the PIN + 24h pending) resets the grant state to DEFAULT. A target
+     * app that does not actually hold/request the permission makes the
+     * DPM call throw — caught per permission, tamper-logged, skipped, so
+     * one bad entry can never block the others or the engine.
+     */
+    fun applyPermissionLocks(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val desired = Store.lockedPermissions(ctx)
+                .filterKeys { it != ctx.packageName && !isProtectedPackage(ctx, it) }
+            var applied = Store.lockedPermissionsApplied(ctx)
+            // Reset locks that are no longer wanted (post-pending state).
+            val appliedSnapshot = applied
+            for ((pkg, perms) in appliedSnapshot) {
+                val unwanted = perms - (desired[pkg] ?: emptySet())
+                for (perm in unwanted) {
+                    if (setGrantStateVerified(ctx, dpm, admin, pkg, perm,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT)) {
+                        val rest = (applied[pkg] ?: emptySet()) - perm
+                        applied = if (rest.isEmpty()) applied - pkg else applied + (pkg to rest)
+                    }
+                }
+            }
+            // Apply locks that are wanted but not yet verifiably on.
+            for ((pkg, perms) in desired) {
+                val todo = if (force) perms else perms - (applied[pkg] ?: emptySet())
+                for (perm in todo) {
+                    if (setGrantStateVerified(ctx, dpm, admin, pkg, perm,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_DENIED)) {
+                        applied = applied + (pkg to ((applied[pkg] ?: emptySet()) + perm))
+                    }
+                }
+            }
+            if (applied != Store.lockedPermissionsApplied(ctx)) {
+                Store.saveLockedPermissionsApplied(ctx, applied)
+            }
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyPermissionLocks failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /** setPermissionGrantState + read-back verification, guarded per
+     *  permission. An uninstalled package holds no grant state, so it
+     *  counts as done; a package that never requested the permission
+     *  throws inside DPM — caught here and reported as not-applied (the
+     *  UI picker only offers permissions the app actually requested, so
+     *  this should be rare: manifest changes after an app update). */
+    private fun setGrantStateVerified(
+        ctx: Context,
+        dpm: DevicePolicyManager,
+        admin: ComponentName,
+        pkg: String,
+        perm: String,
+        state: Int
+    ): Boolean {
+        if (!isPackageInstalled(ctx, pkg)) return true
+        return try {
+            dpm.setPermissionGrantState(admin, pkg, perm, state)
+            dpm.getPermissionGrantState(admin, pkg, perm) == state
+        } catch (e: Throwable) {
+            try {
+                Store.logTamper(ctx, "setPermissionGrantState($pkg, $perm, $state) failed: ${e.message}")
+            } catch (_: Throwable) { }
+            false
+        }
+    }
+
+    // -- Stage 5: Chrome data clear --
+
+    /**
+     * Wipe Chrome's app data (cookies, history, saved logins, cache) via
+     * clearApplicationUserData. Owner-only and PIN-gated at the UI layer;
+     * it is a reset action, not a weakening, so no 24h pending. The
+     * result arrives asynchronously on the main executor and is reported
+     * through [onDone]; nothing here can crash the caller.
+     */
+    fun clearChromeData(ctx: Context, onDone: (Boolean) -> Unit) {
+        try {
+            if (!isDeviceOwner(ctx)) {
+                try { onDone(false) } catch (_: Throwable) { }
+                return
+            }
+            val executor = androidx.core.content.ContextCompat.getMainExecutor(ctx)
+            dpm(ctx).clearApplicationUserData(
+                adminComponent(ctx), CHROME_PACKAGE, executor,
+                DevicePolicyManager.OnClearApplicationUserDataListener { _, succeeded ->
+                    try { onDone(succeeded) } catch (_: Throwable) { }
+                }
+            )
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "clearChromeData failed: ${e.message}") } catch (_: Throwable) { }
+            try { onDone(false) } catch (_: Throwable) { }
+        }
+    }
+
+    // -- Stage 6: security + network logging (tamper evidence) --
+
+    /**
+     * Turn on security logging and network logging at owner activation.
+     * The system then keeps tamper-evidence logs (keyguard events, adb
+     * shell use, app process starts, DNS lookups, connections) and calls
+     * AdminReceiver when new material is available. Marker-guarded: once
+     * verifiably on, the engine tick never touches it again. Logs are
+     * read only when Tamim opens them from Settings (the helpers below).
+     */
+    fun applyOwnerLogging(ctx: Context) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            if (Store.ownerLoggingApplied(ctx)) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            var ok = true
+            try { dpm.setSecurityLoggingEnabled(admin, true) } catch (e: Throwable) {
+                ok = false
+                Store.logTamper(ctx, "setSecurityLoggingEnabled failed: ${e.message}")
+            }
+            try { dpm.setNetworkLoggingEnabled(admin, true) } catch (e: Throwable) {
+                ok = false
+                Store.logTamper(ctx, "setNetworkLoggingEnabled failed: ${e.message}")
+            }
+            if (ok) Store.setOwnerLoggingApplied(ctx, true)
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyOwnerLogging failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /** Human-readable name for the security-log tags we expect to see;
+     *  anything else is shown as its numeric tag (never hidden). */
+    private fun securityTagName(tag: Int): String = when (tag) {
+        android.app.admin.SecurityLog.TAG_ADB_SHELL_INTERACTIVE -> "ADB shell খোলা হয়েছে"
+        android.app.admin.SecurityLog.TAG_ADB_SHELL_CMD -> "ADB কমান্ড চালানো হয়েছে"
+        android.app.admin.SecurityLog.TAG_APP_PROCESS_START -> "অ্যাপ প্রসেস শুরু"
+        android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISSED -> "লক স্ক্রিন খোলা হয়েছে"
+        android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISS_ATTEMPT -> "লক স্ক্রিন খোলার চেষ্টা"
+        android.app.admin.SecurityLog.TAG_KEYGUARD_DISMISS_AUTH_ATTEMPT -> "লক স্ক্রিনে প্রমাণীকরণের চেষ্টা"
+        android.app.admin.SecurityLog.TAG_KEYGUARD_SECURED -> "লক স্ক্রিন সুরক্ষিত (ব্যর্থ চেষ্টা)"
+        android.app.admin.SecurityLog.TAG_OS_STARTUP -> "ফোন চালু হয়েছে"
+        android.app.admin.SecurityLog.TAG_OS_SHUTDOWN -> "ফোন বন্ধ হয়েছে"
+        android.app.admin.SecurityLog.TAG_LOGGING_STARTED -> "লগিং শুরু"
+        android.app.admin.SecurityLog.TAG_LOGGING_STOPPED -> "লগিং বন্ধ"
+        android.app.admin.SecurityLog.TAG_PASSWORD_CHANGED -> "ডিভাইস পাসওয়ার্ড বদল হয়েছে"
+        android.app.admin.SecurityLog.TAG_REMOTE_LOCK -> "রিমোট লক"
+        android.app.admin.SecurityLog.TAG_WIPE_FAILURE -> "ওয়াইপ ব্যর্থ"
+        android.app.admin.SecurityLog.TAG_MEDIA_MOUNT -> "স্টোরেজ মাউন্ট"
+        android.app.admin.SecurityLog.TAG_MEDIA_UNMOUNT -> "স্টোরেজ আনমাউন্ট"
+        else -> "ইভেন্ট (ট্যাগ $tag)"
+    }
+
+    /** Wall-clock estimate for a security/network log timestamp: the log
+     *  clock is nanos since boot, so anchor it against the elapsed clock. */
+    private fun logEventTimeText(timeNanos: Long): String {
+        val elapsedAgoMs = (android.os.SystemClock.elapsedRealtimeNanos() - timeNanos) / 1_000_000L
+        val wallMs = System.currentTimeMillis() - elapsedAgoMs
+        return java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date(wallMs))
+    }
+
+    /**
+     * Read the security logs (current + pre-reboot buffer merged
+     * best-effort) as display lines "time — event", oldest dropped so at
+     * most the last [maxLines] are returned, plus the total count.
+     * Returns null when not Device Owner; an empty list honestly means
+     * the system has nothing buffered yet.
+     */
+    fun securityLogLines(ctx: Context, maxLines: Int = 20): Pair<Int, List<String>>? {
+        return try {
+            if (!isDeviceOwner(ctx)) return null
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val events = mutableListOf<android.app.admin.SecurityLog.SecurityEvent>()
+            try { dpm.retrievePreRebootSecurityLogs(admin)?.let { events.addAll(it) } } catch (_: Throwable) { }
+            try { dpm.retrieveSecurityLogs(admin)?.let { events.addAll(it) } } catch (_: Throwable) { }
+            val lines = events.takeLast(maxLines).map { ev ->
+                "${logEventTimeText(ev.timeNanos)} — ${securityTagName(ev.tag)}"
+            }
+            events.size to lines
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "securityLogLines failed: ${e.message}") } catch (_: Throwable) { }
+            null
+        }
+    }
+
+    /**
+     * Consume the pending network-log batch (if any) and summarise it:
+     * total event count + how many distinct hosts appeared + up to
+     * [maxHosts] host names. DNS events carry the hostname directly;
+     * connect events only carry an IP address + port (no name) — those
+     * are counted and shown as addresses. NOTE: a batch token can be
+     * retrieved exactly once; calling this consumes the batch, which
+     * the UI text states openly.
+     */
+    fun networkLogSummary(ctx: Context, maxHosts: Int = 20): Triple<Int, Int, List<String>>? {
+        return try {
+            if (!isDeviceOwner(ctx)) return null
+            val token = Store.networkLogBatchToken(ctx)
+            if (token < 0) return null
+            val events = dpm(ctx).retrieveNetworkLogs(adminComponent(ctx), token)
+                ?: return Triple(0, 0, emptyList())
+            // Consumed: a second retrieve with the same token would fail.
+            Store.setNetworkLogBatchToken(ctx, -1L)
+            val hosts = LinkedHashSet<String>()
+            for (ev in events) {
+                try {
+                    when (ev) {
+                        is android.app.admin.NetworkEvent.DnsEvent ->
+                            if (ev.hostname.isNotBlank()) hosts += ev.hostname
+                        is android.app.admin.NetworkEvent.ConnectEvent ->
+                            ev.address?.hostAddress?.let { hosts += it }
+                        else -> { }
+                    }
+                } catch (_: Throwable) { }
+            }
+            Triple(events.size, hosts.size, hosts.take(maxHosts))
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "networkLogSummary failed: ${e.message}") } catch (_: Throwable) { }
+            null
+        }
+    }
+
+    // -- Stage 7: Factory Reset Protection --
+
+    /**
+     * Factory Reset Protection bound to [Store.frpEmail]: after a
+     * recovery-mode factory reset, Android demands sign-in with THIS
+     * Google account before the phone can be set up again. An empty
+     * e-mail means the policy is explicitly cleared (no accounts,
+     * disabled). Wrong e-mail = the phone would demand somebody else's
+     * account after a reset, which is why the UI warns so plainly and why
+     * changing/clearing it is a PIN + 24h weakening. Marker-guarded like
+     * everything else; FactoryResetProtectionPolicy is API 30+, and the
+     * whole call is Throwable-guarded, so on older systems it simply
+     * never applies (Stage B devices run Android 15 anyway).
+     */
+    fun applyFrpPolicy(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = Store.frpEmail(ctx)
+            if (!force && Store.frpAppliedEmail(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val policy = android.app.admin.FactoryResetProtectionPolicy.Builder()
+                .setFactoryResetProtectionAccounts(if (want.isBlank()) emptyList() else listOf(want))
+                .setFactoryResetProtectionEnabled(want.isNotBlank())
+                .build()
+            dpm.setFactoryResetProtectionPolicy(admin, policy)
+            Store.setFrpAppliedEmail(ctx, want)
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyFrpPolicy failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
     // ---- v1.5.1 safety: packages that must NEVER be suspended ----
     // Suspending one of these in Device Owner mode could strand the phone:
     // no launcher to go home to, no Settings to recover with, no dialer.
@@ -518,7 +946,9 @@ object AdminHelper {
             // airplane-mode key as NETWORK_LOCK_RESTRICTIONS).
             android.os.UserManager.DISALLOW_CONFIG_WIFI,
             android.os.UserManager.DISALLOW_CONFIG_TETHERING,
-            "no_airplane_mode"
+            "no_airplane_mode",
+            // v1.12.0: nor may the account-modify block.
+            android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS
         )
         for (r in restrictions) {
             try { dpm.clearUserRestriction(admin, r) } catch (_: Throwable) { }
@@ -574,6 +1004,88 @@ object AdminHelper {
             return false
         }
 
+        // Stage 3d (v1.12.0): reset the keyguard + password hardening —
+        // VERIFIED by read-back, same abort rule: an ownerless phone must
+        // not keep a forced PIN policy or a hardened lock screen.
+        try {
+            dpm.setKeyguardDisabledFeatures(admin, DevicePolicyManager.KEYGUARD_DISABLE_FEATURES_NONE)
+            dpm.setPasswordQuality(admin, DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED)
+            dpm.setPasswordMinimumLength(admin, 0)
+            dpm.setMaximumTimeToLock(admin, 0L)
+        } catch (_: Throwable) { }
+        val keyguardNow = try { dpm.getKeyguardDisabledFeatures(admin) } catch (_: Throwable) { -1 }
+        val qualityNow = try { dpm.getPasswordQuality(admin) } catch (_: Throwable) { -1 }
+        val minLenNow = try { dpm.getPasswordMinimumLength(admin) } catch (_: Throwable) { -1 }
+        val maxLockNow = try { dpm.getMaximumTimeToLock(admin) } catch (_: Throwable) { -1L }
+        if (keyguardNow != DevicePolicyManager.KEYGUARD_DISABLE_FEATURES_NONE ||
+            qualityNow != DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED ||
+            minLenNow != 0 || maxLockNow != 0L
+        ) {
+            Store.logTamper(ctx, "Emergency exit ABORTED — keyguard/password hardening not reset (kg=$keyguardNow, q=$qualityNow, len=$minLenNow, lock=$maxLockNow)")
+            return false
+        }
+
+        // Stage 3e (v1.12.0): unhide every app hidden by the hide-apps
+        // feature — VERIFIED per package, same abort rule (Stage 4 below
+        // also restores ledger packages; this stage covers the desired ∪
+        // applied hidden sets even if a ledger entry was ever lost).
+        val hiddenPkgs = (Store.hiddenApps(ctx) + Store.hiddenAppsApplied(ctx)).distinct()
+        for (pkg in hiddenPkgs) {
+            try { dpm.setApplicationHidden(admin, pkg, false) } catch (_: Throwable) { }
+            val stillHidden =
+                try { dpm.isApplicationHidden(admin, pkg) } catch (_: Throwable) { false }
+            if (stillHidden) {
+                Store.logTamper(ctx, "Emergency exit ABORTED — app still hidden: $pkg")
+                return false
+            }
+        }
+
+        // Stage 3f (v1.12.0): reset every permission lock to DEFAULT —
+        // best-effort by design (an uninstalled app holds no grant state;
+        // a failure here must not strand the whole exit), each result
+        // read back and logged when it does not take.
+        val lockedPkgs = (Store.lockedPermissions(ctx).keys +
+            Store.lockedPermissionsApplied(ctx).keys).distinct()
+        for (pkg in lockedPkgs) {
+            val perms = ((Store.lockedPermissions(ctx)[pkg] ?: emptySet()) +
+                (Store.lockedPermissionsApplied(ctx)[pkg] ?: emptySet())).distinct()
+            for (perm in perms) {
+                try {
+                    dpm.setPermissionGrantState(admin, pkg, perm,
+                        DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT)
+                    val nowState = try { dpm.getPermissionGrantState(admin, pkg, perm) } catch (_: Throwable) { -1 }
+                    if (nowState != DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT) {
+                        Store.logTamper(ctx, "Exit cleanup: permission lock not reset for $pkg / $perm (state=$nowState)")
+                    }
+                } catch (e: Throwable) {
+                    Store.logTamper(ctx, "Exit cleanup: setPermissionGrantState($pkg, $perm) failed: ${e.message}")
+                }
+            }
+        }
+
+        // Stage 3g (v1.12.0): clear the FRP policy (no accounts, disabled)
+        // — best-effort with a read-back check, and disable security +
+        // network logging. Neither may abort the exit (spec): logging is
+        // evidence tooling, not a hold on the phone, and an FRP policy
+        // that failed to clear is logged loudly for manual follow-up.
+        try {
+            dpm.setFactoryResetProtectionPolicy(
+                admin,
+                android.app.admin.FactoryResetProtectionPolicy.Builder()
+                    .setFactoryResetProtectionAccounts(emptyList())
+                    .setFactoryResetProtectionEnabled(false)
+                    .build()
+            )
+            val frpNow = try { dpm.getFactoryResetProtectionPolicy(admin) } catch (_: Throwable) { null }
+            if (frpNow != null && frpNow.isFactoryResetProtectionEnabled) {
+                Store.logTamper(ctx, "Exit cleanup: FRP policy still enabled after clear attempt")
+            }
+        } catch (e: Throwable) {
+            Store.logTamper(ctx, "Exit cleanup: FRP clear failed: ${e.message}")
+        }
+        try { dpm.setSecurityLoggingEnabled(admin, false) } catch (_: Throwable) { }
+        try { dpm.setNetworkLoggingEnabled(admin, false) } catch (_: Throwable) { }
+
         // Stage 4: restore every managed package (ledger ∪ current limits),
         // VERIFIED per package. A package that cannot be restored aborts the
         // exit — leaving it suspended/hidden with no owner would strand it.
@@ -611,6 +1123,18 @@ object AdminHelper {
             // (dnsFilterOn, networkLockOn) stay saved, like v1.10.0's.
             Store.setDnsFilterApplied(ctx, null)
             Store.setNetworkLockApplied(ctx, false)
+            // v1.12.0: same for the batch — everything above is verifiably
+            // undone (Stages 2, 3d, 3e) or best-effort cleared and logged
+            // (3f, 3g, logging). The DESIRED settings (keyguardHardeningOn,
+            // accountBlockOn, hiddenApps, lockedPermissions, frpEmail)
+            // stay saved, like every earlier version's: if Device Owner
+            // is ever set again, applyStrictPolicies re-applies them.
+            Store.setKeyguardHardeningApplied(ctx, null)
+            Store.setAccountBlockApplied(ctx, null)
+            Store.saveHiddenAppsApplied(ctx, emptySet())
+            Store.saveLockedPermissionsApplied(ctx, emptyMap())
+            Store.setOwnerLoggingApplied(ctx, false)
+            Store.setFrpAppliedEmail(ctx, null)
         } catch (_: Throwable) { }
         Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (verified cleanup)")
         return true

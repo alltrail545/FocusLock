@@ -81,6 +81,18 @@ object Engine {
         // in this same tick). Applied-marker guard inside: unchanged
         // state costs no DPM calls; no-op without Device Owner.
         AdminHelper.applyDnsFilter(ctx)
+        // v1.12.0: the all-in-one batch follows the saved state the same
+        // way — keyguard/password hardening, the account-modify block,
+        // hidden apps, permission locks, the FRP policy, and owner
+        // logging. A pending change that just landed above takes DPM
+        // effect in this same tick; every apply is marker-guarded
+        // (unchanged state = zero DPM calls) and owner-gated.
+        AdminHelper.applyKeyguardHardening(ctx)
+        AdminHelper.applyAccountBlock(ctx)
+        AdminHelper.applyHiddenApps(ctx)
+        AdminHelper.applyPermissionLocks(ctx)
+        AdminHelper.applyFrpPolicy(ctx)
+        AdminHelper.applyOwnerLogging(ctx)
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.
