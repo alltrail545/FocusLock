@@ -8,16 +8,17 @@ FocusLock-কে ফোনের **Device Owner** বানানোর পু�
 
 ## ধাপ 0 — যা যা লাগবে
 
-- [ ] একটা PC (Windows / Mac / Linux) + USB কেবল (ডেটা কেবল, শুধু চার্জের কেবল নয়)
-- [ ] PC-তে [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) ডাউনলোড ও আনজিপ করা (`adb` ওখানেই থাকে)
-- [ ] ফোনে FocusLock **v1.5.0** ইনস্টল করা থাকবে (ধাপ 1)
+- [ ] **কমান্ড চালানোর একটা পথ** — দুটোর যেকোনো একটা:
+  - **PC ছাড়াই (সুপারিশকৃত):** ফোনে **Shizuku** + **Rish** (দুটোই Play Store-এ ফ্রি; তোমার ফোনে Shizuku ইতিমধ্যে authorized অবস্থায় চলছে — PhoneLink ওটা দিয়েই কাজ করে, তাই নতুন pairing লাগার কথা নয়)
+  - **PC দিয়ে:** একটা PC (Windows / Mac / Linux) + USB ডেটা কেবল (শুধু চার্জের কেবল নয়) + PC-তে [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) ডাউনলোড ও আনজিপ করা (`adb` ওখানেই থাকে)
+- [ ] ফোনে FocusLock-এর **সর্বশেষ সংস্করণ** ইনস্টল করা থাকবে (ধাপ 1)
 - [ ] Google অ্যাকাউন্টের **password মনে আছে** / হাতের কাছে আছে (ধাপ 3-এর পরে আবার লগইন করতে হবে; 2-step verification লাগতে পারে)
 - [ ] ফোনের চার্জ অন্তত 50%
 - [ ] জরুরি ফাইল/ছবির ব্যাকআপ (সতর্কতা হিসেবে — স্বাভাবিক প্রক্রিয়ায় কিছু মোছে না)
 
 ## ধাপ 1 — ফোনে FocusLock প্রস্তুত করো
 
-1. পুরোনো সংস্করণ থাকলে: অ্যাপের ভেতর সেটিংস → **সেটিংস ব্যাকআপ** থেকে backup ফাইল সেভ করো → পুরোনোটা **আনইনস্টল** → **FocusLock-v1.5.0-apk** ইনস্টল করো (CI সাইনিং প্রতিবার আলাদা, তাই uninstall-first বাধ্যতামূলক)
+1. পুরোনো সংস্করণ থাকলে: অ্যাপের ভেতর সেটিংস → **সেটিংস ব্যাকআপ** থেকে backup ফাইল সেভ করো → পুরোনোটা **আনইনস্টল** → **সর্বশেষ APK** ইনস্টল করো (CI সাইনিং প্রতিবার আলাদা, তাই uninstall-first বাধ্যতামূলক)
 2. অ্যাপ খুলে ব্যাকআপ **রিস্টোর** করো (শিডিউল/লিমিট/প্রিসেট ফিরে আসবে)
 3. **PIN সেট করো** — এমন PIN যেটা তুমি কখনো ভুলবে না
 4. সেটিংস ট্যাবের **পারমিশন সেটিংস** কার্ড থেকে সবগুলো দাও:
@@ -34,7 +35,7 @@ FocusLock-কে ফোনের **Device Owner** বানানোর পু�
 2. Settings → System / Additional settings → **Developer options** → **USB debugging** ON করো
 3. (Infinix XOS-এ কোনো কোনো মডেলে "USB debugging (Security settings)" অপশনও থাকে — থাকলে সেটাও ON করো)
 
-> নোট: Owner বসে গেলে Debugging নীতিগতভাবে বন্ধ হয়ে যাবে (DISALLOW_DEBUGGING_FEATURES)। সেটাই উদ্দেশ্য — চিন্তা নেই, কাজটা তার আগেই শেষ হয়ে যাবে।
+> নোট: v1.5.2 থেকে সিদ্ধান্ত বদলেছে — Owner বসার পরেও **USB/Wireless Debugging চালুই থাকবে** (DISALLOW_DEBUGGING_FEATURES ইচ্ছা করে বসানো হয়নি, যাতে Shizuku / Termux / PhoneLink আগের মতো চলে)। এতে Owner-এর শক্তি কমে না — non-testOnly Owner `dpm remove-active-admin` দিয়ে সরানো যায় না, সেটা আগের মতোই।
 
 ## ধাপ 3 — সব অ্যাকাউন্ট সাময়িকভাবে Remove করো
 
@@ -46,7 +47,31 @@ Device Owner কমান্ড **ফোনে কোনো অ্যাকা�
 
 > সতর্কতা: এই অবস্থায় ফোন **রিস্টার্ট দিও না** যতক্ষণ না ধাপ 4 শেষ হচ্ছে — শুধু সাবধানে এগিয়ে যাও।
 
-## ধাপ 4 — PC থেকে Device Owner কমান্ড
+## ধাপ 4 — Device Owner কমান্ড (দুটো পথের একটা)
+
+### পথ ক — Shizuku + Rish (PC ছাড়াই) ✅ সুপারিশকৃত
+
+তোমার ফোনে Shizuku ইতিমধ্যে authorized অবস্থায় চলছে (PhoneLink ওটা দিয়েই কাজ করে), তাই নতুন করে pairing লাগার কথা নয়।
+
+1. Play Store থেকে **Rish** ইনস্টল করো (Shizuku-এর অফিসিয়াল shell — "Rish" লিখে সার্চ দিলেই পাবে)
+2. **Rish** খোলো — Shizuku চলমান থাকলে সরাসরি shell পাবে
+3. এই কমান্ডটা হুবহু চালাও:
+
+```
+dpm set-device-owner com.focuslock.app/.AdminReceiver
+```
+
+4. সফল হলে আউটপুট:
+
+```
+Success: Device owner set to package com.focuslock.app
+```
+
+5. এরর এলে নিচের টেবিল দেখো (PC পথের মতোই একই এরর আসে)
+
+> Rish না চাইলে Termux-এর ভেতরেও `dpm` চালানো যায় — তবে Rish-ই সবচেয়ে সোজা, কারণ ওটা Shizuku-র permission সরাসরি পায়।
+
+### পথ খ — PC থেকে (Shizuku না থাকলে)
 
 1. USB কেবল দিয়ে ফোন PC-তে লাগাও; ফোনে USB মোড **File Transfer** বেছে নাও (শুধু Charging নয়)
 2. PC-তে Platform Tools ফোল্ডারে টার্মিনাল/Command Prompt খুলে চালাও:
@@ -85,7 +110,7 @@ Success: Device owner set to package com.focuslock.app
 1. Settings → Factory data reset করে ফোন রিসেট করো
 2. নতুন সেটআপে **Wi-Fi ও Google অ্যাকাউন্ট যোগ করা Skip** করো (কোনো অ্যাকাউন্ট ছাড়াই হোম স্ক্রিনে যাও)
 3. ধাপ 2-এর মতো USB Debugging চালু করো
-4. FocusLock APK PC থেকে বসাও: `adb install FocusLock-v1.5.0-apk` (অথবা কেবল দিয়ে কপি করে ফোনে ট্যাপ করে ইনস্টল)
+4. FocusLock-এর সর্বশেষ APK PC থেকে বসাও: `adb install <apk-ফাইলের-নাম>` (অথবা কেবল দিয়ে কপি করে ফোনে ট্যাপ করে ইনস্টল)
 5. ফোনে FocusLock খুলে **Device Admin** চালু করো (ধাপ 1-এর 4 নম্বর)
 6. ধাপ 4-এর `set-device-owner` কমান্ড চালাও
 7. সফল হলে তারপর Google অ্যাকাউন্ট যোগ করো ও বাকি সব পুনরায় সেটআপ করো
@@ -112,7 +137,7 @@ Success: Device owner set to package com.focuslock.app
 2. আবেদন **24 ঘণ্টা পরে** কার্যকর হয় (মাঝে মন বদলালে Pending বাতিল করা যায়, PIN দিয়ে)
 3. কার্যকর হওয়ার সময় অ্যাপ নিজে এই ক্রমে সব ছাড়ে — যাতে কোনো অ্যাপ আটকে না থাকে:
    - Status bar ফেরত + LockTask whitelist খালি
-   - সব user restriction তোলা (Safe boot / Factory reset / সময় / Debugging / Add user)
+   - সব user restriction তোলা (Safe boot / Factory reset / সময় / Add user — Debugging v1.5.2 থেকে আর বসানোই হয় না, তাই তোলারও কিছু নেই)
    - নিজের uninstall-block তোলা
    - লিমিট-দেওয়া সব অ্যাপ **unsuspend + unhide**
    - সবশেষে Device Owner + Device Admin সরানো
