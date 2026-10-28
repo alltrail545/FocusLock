@@ -783,41 +783,26 @@ object AdminHelper {
     }
 
     /**
-     * Consume the pending network-log batch (if any) and summarise it:
-     * total event count + how many distinct hosts appeared + up to
-     * [maxHosts] host names. DNS events carry the hostname directly;
-     * connect events only carry an IP address + port (no name) — those
-     * are counted and shown as addresses. NOTE: a batch token can be
-     * retrieved exactly once; calling this consumes the batch, which
-     * the UI text states openly.
+     * Consume the pending network-log batch (if any) and return just the
+     * total event count. NOTE (v1.12.2): the per-event host breakdown
+     * was dropped — the NetworkEvent.DnsEvent / ConnectEvent subtypes do
+     * not resolve against this project's compile SDK, which broke the
+     * v1.12.0/v1.12.1 CI builds. Counting via the base NetworkEvent list
+     * works everywhere. A batch token can be retrieved exactly once;
+     * calling this consumes the batch, which the UI text states openly.
      */
-    fun networkLogSummary(ctx: Context, maxHosts: Int = 20): Triple<Int, Int, List<String>>? {
+    fun networkLogCount(ctx: Context): Int? {
         return try {
             if (!isDeviceOwner(ctx)) return null
             val token = Store.networkLogBatchToken(ctx)
             if (token < 0) return null
             val events = dpm(ctx).retrieveNetworkLogs(adminComponent(ctx), token)
-                ?: return Triple(0, 0, emptyList())
+                ?: return 0
             // Consumed: a second retrieve with the same token would fail.
             Store.setNetworkLogBatchToken(ctx, -1L)
-            val hosts = LinkedHashSet<String>()
-            for (ev in events) {
-                try {
-                    when (ev) {
-                        is android.app.admin.NetworkEvent.DnsEvent ->
-                            // v1.12.1 compile fix: explicit Java getters.
-                            if (ev.getHostname().isNotBlank()) hosts += ev.getHostname()
-                        is android.app.admin.NetworkEvent.ConnectEvent ->
-                            // v1.12.1 compile fix: ConnectEvent has no
-                            // "address" property — its getter is getInetAddress().
-                            ev.getInetAddress()?.hostAddress?.let { hosts += it }
-                        else -> { }
-                    }
-                } catch (_: Throwable) { }
-            }
-            Triple(events.size, hosts.size, hosts.take(maxHosts))
+            events.size
         } catch (e: Throwable) {
-            try { Store.logTamper(ctx, "networkLogSummary failed: ${e.message}") } catch (_: Throwable) { }
+            try { Store.logTamper(ctx, "networkLogCount failed: ${e.message}") } catch (_: Throwable) { }
             null
         }
     }

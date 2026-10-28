@@ -1673,19 +1673,17 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        val result = AdminHelper.networkLogSummary(this)
-        if (result == null) {
+        val total = AdminHelper.networkLogCount(this)
+        if (total == null) {
             toast("লগ পড়া যায়নি — আবার চেষ্টা করো")
             return
         }
-        val (total, distinct, hosts) = result
-        Store.logTamper(this, "Network log summary viewed: $total events, $distinct hosts")
+        Store.logTamper(this, "Network log viewed: $total events")
         val text = if (total == 0) {
             "এই batch-এ কোনো ইভেন্ট ছিল না।"
         } else {
-            "এই batch-এ মোট $total টি নেটওয়ার্ক ইভেন্ট, আলাদা হোস্ট $distinct টি। " +
-                "(একটা batch একবারই পড়া যায় — এই batch-টা এখন খরচ হয়ে গেছে।)\n\n" +
-                hosts.joinToString("\n")
+            "এই batch-এ মোট $total টি নেটওয়ার্ক ইভেন্ট ছিল। " +
+                "(একটা batch একবারই পড়া যায় — এই batch-টা এখন খরচ হয়ে গেছে।)"
         }
         showScrollableDialog("Network log সারাংশ", text)
     }
