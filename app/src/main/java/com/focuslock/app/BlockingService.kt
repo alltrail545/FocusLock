@@ -27,7 +27,12 @@ class BlockingService : Service() {
 
     private val tick = object : Runnable {
         override fun run() {
-            Engine.tick(this@BlockingService)
+            // v1.8.0 audit: re-post in finally, same reasoning as the
+            // accessibility watchdog — one stray throw must not end the
+            // 1s enforcement loop for the rest of a lock.
+            try {
+                Engine.tick(this@BlockingService)
+            } catch (_: Throwable) { }
             handler.postDelayed(this, 1000)
         }
     }
@@ -35,7 +40,14 @@ class BlockingService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        startInForeground()
+        // v1.8.0 audit: startForeground can throw on Android 14+
+        // (special-use FGS restrictions / OEM quirks); an uncaught throw
+        // here killed the service in onCreate, before its first tick.
+        try {
+            startInForeground()
+        } catch (e: Exception) {
+            try { Store.logTamper(this, "startForeground failed: ${e.message}") } catch (_: Throwable) { }
+        }
         handler.post(tick)
     }
 
