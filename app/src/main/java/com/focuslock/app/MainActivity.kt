@@ -828,6 +828,68 @@ class MainActivity : AppCompatActivity() {
         })
         content.addView(installCard)
 
+        // ---- v1.11.0: network security (Device Owner) ----
+        // Filtered Private DNS is a standing policy (always-on while the
+        // flag is set); the network-settings lock is a preference whose
+        // restrictions Engine applies only during hard locks. Strengthening
+        // is immediate; both OFF paths are weakening (PIN + 24h pending:
+        // dns_filter_off / network_lock_off). Without Device Owner the
+        // choices still save and the card says so plainly.
+        val netCard = Ui.card(this)
+        netCard.addView(Ui.cardTitle(this, "নেটওয়ার্ক সুরক্ষা (Device Owner)"))
+        val dnsOn = Store.dnsFilterOn(this)
+        netCard.addView(Ui.statusRow(this, "DNS ফিল্টার (পরিবার-বান্ধব)", dnsOn))
+        netCard.addView(Ui.secondary(this, when {
+            !ownerActive -> "Device Owner চালু হলে কার্যকর হবে — এখন পছন্দগুলো শুধু সংরক্ষিত থাকবে।"
+            dnsOn -> "কার্যকর আছে — সব অ্যাপের ইন্টারনেট যাচ্ছে family.cloudflare-dns.com দিয়ে; প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট DNS স্তরেই আটকে যায়।"
+            else -> "Device Owner চালু আছে — DNS ফিল্টার এখন বন্ধ।"
+        }))
+        if (!dnsOn) {
+            netCard.addView(Ui.primaryButton(this, "DNS ফিল্টার চালু করো") {
+                AlertDialog.Builder(this)
+                    .setTitle("DNS ফিল্টার চালু করবে?")
+                    .setMessage("চালু হলে ফোনের সব অ্যাপের ইন্টারনেট Cloudflare-এর পরিবার-বান্ধব DNS (family.cloudflare-dns.com) দিয়ে যাবে — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যাবে। একটা কথা: কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে — ওই সময় দরকার হলে ফিল্টার বন্ধ করতে হবে, আর বন্ধ করা দুর্বলীকরণ বলে PIN + 24 ঘণ্টা লাগবে। সত্যিই চালু করবে?")
+                    .setPositiveButton("চালু করো") { _, _ ->
+                        Store.setDnsFilterOn(this, true)
+                        AdminHelper.applyDnsFilter(this)
+                        Store.logTamper(this, "DNS filter turned ON (family.cloudflare-dns.com)")
+                        toast(if (ownerActive) "DNS ফিল্টার চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
+                        buildUi()
+                    }
+                    .setNegativeButton("বাতিল", null).show()
+            })
+        } else {
+            netCard.addView(Ui.secondaryButton(this, "DNS ফিল্টার বন্ধ করার আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("dns_filter_off", "DNS ফিল্টার বন্ধ করা")
+                }
+            })
+        }
+        netCard.addView(Ui.gap(this, 8))
+        val netLockOn = Store.networkLockOn(this)
+        netCard.addView(Ui.statusRow(this, "ফোকাস/লকের সময় WiFi-হটস্পট-এয়ারপ্লেন সেটিংস লক", netLockOn))
+        netCard.addView(Ui.secondary(this,
+            "চালু থাকলে ফোকাস সেশন বা শিডিউল-লক চলাকালে WiFi, হটস্পট ও এয়ারপ্লেন মোডের সেটিংস বদলানো যাবে না — লক শেষ হলেই আবার খুলে যাবে। WiFi/ডেটা বন্ধ হয় না, শুধু বদলানো আটকায়; তবে এই সময়ে নতুন WiFi নেটওয়ার্কেও যোগ দেওয়া যাবে না।" +
+                if (!ownerActive) " Device Owner চালু হলেই কার্যকর হবে।" else ""))
+        if (!netLockOn) {
+            netCard.addView(Ui.primaryButton(this, "নেটওয়ার্ক লক চালু করো") {
+                Store.setNetworkLockOn(this, true)
+                // If a hard lock is running right now, one engine tick
+                // applies the restrictions immediately.
+                Engine.tick(this)
+                Store.logTamper(this, "Network lock turned ON")
+                toast(if (ownerActive) "নেটওয়ার্ক লক চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
+                buildUi()
+            })
+        } else {
+            netCard.addView(Ui.secondaryButton(this, "নেটওয়ার্ক লক বন্ধ করার আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("network_lock_off", "নেটওয়ার্ক লক বন্ধ করা")
+                }
+            })
+        }
+        content.addView(netCard)
+
         // ---- Automation API (v1.6.0, PhoneLink) ----
         val autoCard = Ui.card(this)
         autoCard.addView(Ui.cardTitle(this, "অটোমেশন (PhoneLink)"))
@@ -1260,6 +1322,8 @@ class MainActivity : AppCompatActivity() {
         action == "remove_device_owner" -> "Device Owner সরানো"
         action == "allow_only_off" -> "শুধু-Allow মোড বন্ধ করা"
         action == "install_block_off" -> "ইনস্টল ব্লক বন্ধ করা"
+        action == "dns_filter_off" -> "DNS ফিল্টার বন্ধ করা"
+        action == "network_lock_off" -> "নেটওয়ার্ক লক বন্ধ করা"
         action.startsWith("uninstall_unprotect:") ->
             "আনইনস্টল-সুরক্ষা তোলা: ${appLabel(action.removePrefix("uninstall_unprotect:"))}"
         action.startsWith("delete_schedule:") -> "শিডিউল মোছা"

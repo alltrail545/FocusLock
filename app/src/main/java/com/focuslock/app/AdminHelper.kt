@@ -77,6 +77,10 @@ object AdminHelper {
         // the per-app uninstall protections (forced re-apply here; the
         // per-tick path inside is state-guarded).
         applyInstallControls(ctx, force = true)
+        // v1.11.0: and the filtered Private DNS, if Tamim enabled it
+        // (forced re-apply; the network-settings lock is NOT a standing
+        // policy — it follows the live lock state in Engine's tick).
+        applyDnsFilter(ctx, force = true)
     }
 
     /**
@@ -302,6 +306,119 @@ object AdminHelper {
         }
     }
 
+    // ---- v1.11.0: filtered Private DNS + network-settings lock ----
+
+    /** Cloudflare's family filter: adult + malware domains fail to resolve
+     *  at DNS level, for EVERY app on the phone — not just Chrome. */
+    const val DNS_FILTER_HOST = "family.cloudflare-dns.com"
+
+    // Settings.Global keys for Android Private DNS. The literals are used
+    // (they are exactly the values of Settings.Global.PRIVATE_DNS_MODE /
+    // PRIVATE_DNS_SPECIFIER) so this compiles against any SDK stub.
+    private const val KEY_PRIVATE_DNS_MODE = "private_dns_mode"
+    private const val KEY_PRIVATE_DNS_SPECIFIER = "private_dns_specifier"
+    private const val DNS_MODE_HOSTNAME = "hostname"
+    private const val DNS_MODE_OFF = "opportunistic"
+
+    /**
+     * Filtered DNS, always-on while [Store.dnsFilterOn] is set: as Device
+     * Owner we point Android's Private DNS at [DNS_FILTER_HOST] via
+     * setGlobalSetting, which the user then cannot change in Settings.
+     * OFF resets to the platform default (opportunistic, no fixed host).
+     *
+     * The write is verified by reading Settings.Global back; the applied
+     * marker in [Store] is written ONLY on a verified match, so a failed
+     * or partial write is retried on the next engine tick instead of being
+     * mistaken for done — and an unchanged state costs zero DPM calls.
+     * No-op without Device Owner; every failure is caught + tamper-logged.
+     */
+    fun applyDnsFilter(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = Store.dnsFilterOn(ctx)
+            if (!force && Store.dnsFilterApplied(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val mode = if (want) DNS_MODE_HOSTNAME else DNS_MODE_OFF
+            val spec = if (want) DNS_FILTER_HOST else ""
+            dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_MODE, mode)
+            dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_SPECIFIER, spec)
+            val cr = ctx.contentResolver
+            val gotMode = try { Settings.Global.getString(cr, KEY_PRIVATE_DNS_MODE) } catch (_: Throwable) { null }
+            val gotSpec = try { Settings.Global.getString(cr, KEY_PRIVATE_DNS_SPECIFIER) } catch (_: Throwable) { null }
+            if (gotMode == mode && (gotSpec ?: "") == spec) {
+                Store.setDnsFilterApplied(ctx, want)
+            } else {
+                // Marker deliberately untouched: retried on the next tick.
+                try {
+                    Store.logTamper(ctx, "applyDnsFilter verify mismatch: want $mode/$spec, got $gotMode/$gotSpec")
+                } catch (_: Throwable) { }
+            }
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyDnsFilter failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /**
+     * The three network restrictions of the v1.11.0 lock. The airplane-mode
+     * entry is the literal restriction key "no_airplane_mode":
+     * addUserRestriction takes the UserManager constant STRING itself, and
+     * that literal is exactly the value of the airplane-mode restriction
+     * key — identical on the wire either way.
+     *
+     * NOTE (intended strictness): DISALLOW_CONFIG_WIFI blocks CHANGING
+     * WiFi configuration — which includes joining a NEW network while the
+     * lock runs. It does not switch WiFi or mobile data off; the current
+     * connection keeps working, it just cannot be changed mid-lock.
+     */
+    private val NETWORK_LOCK_RESTRICTIONS = listOf(
+        android.os.UserManager.DISALLOW_CONFIG_WIFI,
+        android.os.UserManager.DISALLOW_CONFIG_TETHERING,
+        "no_airplane_mode"
+    )
+
+    /**
+     * Network-settings lock during hard locks: while [hardLock] (a Full
+     * schedule lock or a focus session) AND [Store.networkLockOn], the
+     * user cannot change WiFi / tethering / airplane-mode settings — three
+     * classic mid-lock escape routes. The moment the state leaves hard
+     * lock, exactly those three are lifted again.
+     *
+     * Applied state lives in a PERSISTED Store marker: if the process
+     * dies mid-lock, the next tick still knows the restrictions may be in
+     * force and lifts/restores them correctly (the v1.8.0 DND lesson).
+     * Verification reads the restrictions back through UserManager; the
+     * marker moves only on a verified match. No-op without Device Owner.
+     */
+    fun applyNetworkLock(ctx: Context, hardLock: Boolean) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = hardLock && Store.networkLockOn(ctx)
+            if (Store.networkLockApplied(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            if (want) {
+                for (r in NETWORK_LOCK_RESTRICTIONS) dpm.addUserRestriction(admin, r)
+            } else {
+                for (r in NETWORK_LOCK_RESTRICTIONS) dpm.clearUserRestriction(admin, r)
+            }
+            val um = ctx.getSystemService(android.os.UserManager::class.java)
+            val verified = NETWORK_LOCK_RESTRICTIONS.all { r ->
+                (try { um?.hasUserRestriction(r) == true } catch (_: Throwable) { false }) == want
+            }
+            if (verified) {
+                Store.setNetworkLockApplied(ctx, want)
+            } else {
+                // Marker deliberately untouched: retried on the next tick.
+                try {
+                    Store.logTamper(ctx, "applyNetworkLock verify mismatch: want=$want")
+                } catch (_: Throwable) { }
+            }
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyNetworkLock failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
     // ---- v1.5.1 safety: packages that must NEVER be suspended ----
     // Suspending one of these in Device Owner mode could strand the phone:
     // no launcher to go home to, no Settings to recover with, no dialer.
@@ -396,7 +513,12 @@ object AdminHelper {
             android.os.UserManager.DISALLOW_ADD_USER,
             // v1.10.0: the install block must not survive owner removal.
             android.os.UserManager.DISALLOW_INSTALL_APPS,
-            android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES
+            android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
+            // v1.11.0: nor may the network-settings lock (same literal
+            // airplane-mode key as NETWORK_LOCK_RESTRICTIONS).
+            android.os.UserManager.DISALLOW_CONFIG_WIFI,
+            android.os.UserManager.DISALLOW_CONFIG_TETHERING,
+            "no_airplane_mode"
         )
         for (r in restrictions) {
             try { dpm.clearUserRestriction(admin, r) } catch (_: Throwable) { }
@@ -434,6 +556,24 @@ object AdminHelper {
             }
         }
 
+        // Stage 3c (v1.11.0): reset Private DNS to the platform default —
+        // VERIFIED by read-back, same abort rule: an ownerless phone must
+        // not be stranded on a DNS setting the user can no longer change.
+        try {
+            dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_MODE, DNS_MODE_OFF)
+            dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_SPECIFIER, "")
+        } catch (_: Throwable) { }
+        val dnsModeNow = try {
+            Settings.Global.getString(ctx.contentResolver, KEY_PRIVATE_DNS_MODE)
+        } catch (_: Throwable) { null }
+        val dnsSpecNow = try {
+            Settings.Global.getString(ctx.contentResolver, KEY_PRIVATE_DNS_SPECIFIER)
+        } catch (_: Throwable) { null }
+        if (dnsModeNow != DNS_MODE_OFF || (dnsSpecNow ?: "") != "") {
+            Store.logTamper(ctx, "Emergency exit ABORTED — Private DNS not reset (mode=$dnsModeNow, spec=$dnsSpecNow)")
+            return false
+        }
+
         // Stage 4: restore every managed package (ledger ∪ current limits),
         // VERIFIED per package. A package that cannot be restored aborts the
         // exit — leaving it suspended/hidden with no owner would strand it.
@@ -466,6 +606,11 @@ object AdminHelper {
         try {
             Store.setInstallBlockApplied(ctx, null)
             Store.saveUninstallProtectionsAppliedPkgs(ctx, emptySet())
+            // v1.11.0: same for the DNS / network markers — both verifiably
+            // gone above (Stage 2 + Stage 3c). The DESIRED settings
+            // (dnsFilterOn, networkLockOn) stay saved, like v1.10.0's.
+            Store.setDnsFilterApplied(ctx, null)
+            Store.setNetworkLockApplied(ctx, false)
         } catch (_: Throwable) { }
         Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (verified cleanup)")
         return true

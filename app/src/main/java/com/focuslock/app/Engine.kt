@@ -76,6 +76,11 @@ object Engine {
         // applied-state guards inside AdminHelper mean unchanged state
         // costs no DPM calls, and without Device Owner it is a no-op.
         AdminHelper.applyInstallControls(ctx)
+        // v1.11.0: filtered Private DNS follows the saved flag the same
+        // way (a dns_filter_off pending that just landed above resets DNS
+        // in this same tick). Applied-marker guard inside: unchanged
+        // state costs no DPM calls; no-op without Device Owner.
+        AdminHelper.applyDnsFilter(ctx)
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.
@@ -93,10 +98,17 @@ object Engine {
         }
 
         val state = Blocker.currentBlock(ctx)
+        val hardLock = state is BlockState.Full || state is BlockState.FocusSession
         // Shade guard follows the hard-lock states only.
-        updateShadeGuard(ctx, state is BlockState.Full || state is BlockState.FocusSession)
+        updateShadeGuard(ctx, hardLock)
         // Do Not Disturb follows the hard-lock states too (if the user wants it).
-        updateDnd(ctx, state is BlockState.Full || state is BlockState.FocusSession)
+        updateDnd(ctx, hardLock)
+        // v1.11.0: network-settings lock follows the hard-lock states too
+        // (WiFi / tethering / airplane-mode settings cannot be changed
+        // mid-lock; lifted the moment the lock ends). Owner-gated and
+        // applied-marker-guarded inside AdminHelper; the persisted marker
+        // means a process death mid-lock still restores correctly here.
+        AdminHelper.applyNetworkLock(ctx, hardLock)
 
         when (state) {
             is BlockState.Full -> {

@@ -241,6 +241,21 @@ object Store {
                     AdminHelper.applyInstallControls(ctx)
                 }
             }
+            action == "dns_filter_off" -> {
+                // v1.11.0: the 24h delay has passed — the flag goes off and
+                // Private DNS is reset in the same tick (AdminHelper
+                // no-ops without Device Owner).
+                setDnsFilterOn(ctx, false)
+                AdminHelper.applyDnsFilter(ctx)
+            }
+            action == "network_lock_off" -> {
+                // v1.11.0: only the DESIRED flag changes here. Whether the
+                // three network restrictions are actually in force depends
+                // on the current lock state, which only Engine knows — its
+                // tick runs right after applyPendingIfDue in the same pass
+                // and lifts them via AdminHelper.applyNetworkLock.
+                setNetworkLockOn(ctx, false)
+            }
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -410,6 +425,53 @@ object Store {
     fun saveUninstallProtectionsAppliedPkgs(ctx: Context, set: Set<String>) =
         putPkgSet(ctx, "uninstall_protected_applied", set)
 
+    // ---- v1.11.0: filtered DNS + network-settings lock (Device Owner) ----
+    // Same split as v1.10.0: the DESIRED state lives here; what AdminHelper
+    // has verifiably pushed to the system is tracked in the applied markers
+    // below, so the engine tick re-applies only on change.
+
+    /** Always-on filtered Private DNS (family.cloudflare-dns.com).
+     *  Turning ON is strengthening (immediate); turning OFF is weakening
+     *  and only happens via the "dns_filter_off" pending action. */
+    fun dnsFilterOn(ctx: Context): Boolean = prefs(ctx).getBoolean("dns_filter_on", false)
+    fun setDnsFilterOn(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("dns_filter_on", on).apply()
+
+    /** Last DNS-filter state verifiably written AND read back from
+     *  Settings.Global; null = never applied in this ownership (or state
+     *  unknown — apply again). */
+    fun dnsFilterApplied(ctx: Context): Boolean? {
+        val p = prefs(ctx)
+        if (!p.contains("dns_filter_applied")) return null
+        return p.getBoolean("dns_filter_applied", false)
+    }
+
+    fun setDnsFilterApplied(ctx: Context, on: Boolean?) {
+        val ed = prefs(ctx).edit()
+        if (on == null) ed.remove("dns_filter_applied")
+        else ed.putBoolean("dns_filter_applied", on)
+        ed.apply()
+    }
+
+    /** Lock WiFi / tethering / airplane-mode SETTINGS during a hard lock
+     *  (Full schedule lock or focus session). Default ON: it only ever
+     *  restricts changes while a lock Tamim himself started is running.
+     *  Turning the preference OFF is weakening ("network_lock_off"). */
+    fun networkLockOn(ctx: Context): Boolean = prefs(ctx).getBoolean("network_lock_on", true)
+    fun setNetworkLockOn(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("network_lock_on", on).apply()
+
+    /** Persisted applied marker for the network lock — NOT an in-memory
+     *  flag: if the process dies mid-lock (XOS kills background apps),
+     *  the next tick must know the restrictions may still be in force so
+     *  it can lift them when the lock is over (same lesson as the DND
+     *  restore state below). */
+    fun networkLockApplied(ctx: Context): Boolean =
+        prefs(ctx).getBoolean("network_lock_applied", false)
+
+    fun setNetworkLockApplied(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("network_lock_applied", on).apply()
+
     // ---- v1.8.0: persisted DND restore state ----
     // Engine's "DND was applied, restore this filter afterwards" state used
     // to live only in memory: if the process died mid-lock (XOS kills
@@ -498,6 +560,8 @@ object Store {
         o.put("site_allow_only", siteAllowOnly(ctx))
         o.put("install_block_on", installBlockOn(ctx))
         o.put("uninstall_protected_pkgs", org.json.JSONArray(uninstallProtectedPkgs(ctx).toList()))
+        o.put("dns_filter_on", dnsFilterOn(ctx))
+        o.put("network_lock_on", networkLockOn(ctx))
         return o.toString(2)
     }
 
@@ -531,6 +595,8 @@ object Store {
             strings("site_allow_list")?.let { saveSiteAllowList(ctx, it) }
             bool("site_allow_only")?.let { setSiteAllowOnly(ctx, it) }
             bool("install_block_on")?.let { setInstallBlockOn(ctx, it) }
+            bool("dns_filter_on")?.let { setDnsFilterOn(ctx, it) }
+            bool("network_lock_on")?.let { setNetworkLockOn(ctx, it) }
             strings("uninstall_protected_pkgs")?.let { list ->
                 // Same exclusions as the picker: FocusLock itself and the
                 // system-critical packages are never uninstall-protected
