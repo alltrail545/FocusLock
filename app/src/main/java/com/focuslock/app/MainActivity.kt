@@ -98,6 +98,12 @@ class MainActivity : AppCompatActivity() {
     // ---------------- UI construction ----------------
 
     private fun buildUi() {
+        // v1.15.0: theme + language direction are re-read on every build,
+        // so a change in Settings applies the moment the UI rebuilds.
+        Themes.apply(Store.themeId(this))
+        if (Lang.isRtl(this)) {
+            window.decorView.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL
+        }
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = Ui.aurora(this@MainActivity)
@@ -140,7 +146,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildNavBar(): LinearLayout {
-        val labels = listOf("হোম", "ফোকাস", "শিডিউল", "লিমিট", "সেটিংস")
+        val labels = listOf(
+            Lang.t(this, "tab_home"), Lang.t(this, "tab_focus"), Lang.t(this, "tab_schedule"),
+            Lang.t(this, "tab_limits"), Lang.t(this, "tab_settings")
+        )
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(Ui.dp(this@MainActivity, 16), Ui.dp(this@MainActivity, 2),
@@ -150,7 +159,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                setColor(android.graphics.Color.argb(56, 255, 255, 255))
+                setColor(Ui.RAISED)
                 cornerRadius = Ui.dp(this@MainActivity, 999).toFloat()
                 setStroke(Ui.dp(this@MainActivity, 1), Ui.STROKE)
             }
@@ -209,7 +218,7 @@ class MainActivity : AppCompatActivity() {
         // at a glance: master switch + owner, live lock state with a
         // focus progress bar, and today's headline numbers. ----
         val heroCard = Ui.card(this)
-        heroCard.addView(Ui.cardTitle(this, "অবস্থা"))
+        heroCard.addView(Ui.cardTitle(this, Lang.t(this, "card_status")))
         val heroFocusEnd = Store.focusEndMs(this)
         val heroNow = System.currentTimeMillis()
         heroCard.addView(Ui.body(this,
@@ -251,7 +260,7 @@ class MainActivity : AppCompatActivity() {
         // needs day-to-day. Device Owner belongs to Stage B and lives in
         // Settings; optional features ask for their permission only when used.
         val permCard = Ui.card(this)
-        permCard.addView(Ui.cardHeader(this, "পারমিশন") {
+        permCard.addView(Ui.cardHeader(this, Lang.t(this, "card_permissions")) {
             showScrollableDialog("পারমিশন", "এখানে শুধু প্রতিদিনের কাজের ৩টা জরুরি পারমিশন। সব পারমিশন সেটিংস একসাথে সেটিংস ট্যাবের আলাদা কার্ডে আছে।")
         })
         permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
@@ -260,7 +269,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(permCard)
 
         val nowCard = Ui.card(this)
-        nowCard.addView(Ui.cardTitle(this, "এখনকার অবস্থা"))
+        nowCard.addView(Ui.cardTitle(this, Lang.t(this, "card_now")))
         nowCard.addView(Ui.statusRow(this, "Protection", Store.isProtectionOn(this)))
         val focusEnd = Store.focusEndMs(this)
         if (focusEnd > System.currentTimeMillis()) {
@@ -287,7 +296,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Statistics & report (Tamim: keep it on Home) ----
         val statsCard = Ui.card(this)
-        statsCard.addView(Ui.cardTitle(this, "আজকের হিসাব"))
+        statsCard.addView(Ui.cardTitle(this, Lang.t(this, "card_today")))
         if (usageAccess) {
             val (totalMs, top) = usage
             statsCard.addView(Ui.body(this, "মোট স্ক্রিন টাইম: ${durText(totalMs)}"))
@@ -341,7 +350,7 @@ class MainActivity : AppCompatActivity() {
     // ---- Tab 1: Focus — the main feature ----
     private fun tabFocus(content: LinearLayout) {
         val focusCard = Ui.card(this)
-        focusCard.addView(Ui.cardTitle(this, "ফোকাস সেশন"))
+        focusCard.addView(Ui.cardTitle(this, Lang.t(this, "card_focus_session")))
         focusCard.addView(Ui.label(this, "শুরু করলে সময় শেষ হওয়ার আগে বাতিল করা যাবে না"))
         focusCard.addView(Ui.primaryButton(this, "25 মিনিট ফোকাস") { startFocus(25) })
         focusCard.addView(Ui.secondaryButton(this, "1 ঘণ্টা ফোকাস") { startFocus(60) })
@@ -369,7 +378,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Named focus presets (v1.4): one tap starts the whole setup ----
         val presetCard = Ui.card(this)
-        presetCard.addView(Ui.cardHeader(this, "আমার প্রিসেট") {
+        presetCard.addView(Ui.cardHeader(this, Lang.t(this, "card_presets")) {
             showScrollableDialog("আমার প্রিসেট", "নাম দিয়ে প্রিসেট বানালে এক ট্যাপে সেই ফোকাস শুরু হয় — যেমন 'পড়াশোনা', ২ ঘণ্টা, শুধু বইয়ের অ্যাপ চলবে। একই নামে আবার বানালে আগেরটা বদলে যায়। প্রিসেট মোছা সঙ্গে সঙ্গে হয়, চলমান সেশনে কোনো প্রভাব পড়ে না।")
         })
         val presets = Store.focusPresets(this)
@@ -393,7 +402,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Notification silence during focus (v1.4) ----
         val quietCard = Ui.card(this)
-        quietCard.addView(Ui.cardHeader(this, "নোটিফিকেশন") {
+        quietCard.addView(Ui.cardHeader(this, Lang.t(this, "card_notifications")) {
             showScrollableDialog("নোটিফিকেশন", "চালু থাকলে ফোকাস চলাকালে Do Not Disturb নিজে থেকে অন হয়, শেষ হলে আগের অবস্থায় ফেরে। অ্যালার্ম বাজবে।")
         })
         quietCard.addView(Ui.statusRow(this, "ফোকাস/লকের সময় নোটিফিকেশন চুপ", Store.silenceDuringLock(this)))
@@ -473,7 +482,7 @@ class MainActivity : AppCompatActivity() {
     // ---- Tab 2: Schedule ----
     private fun tabSchedule(content: LinearLayout) {
         val scheduleCard = Ui.card(this)
-        scheduleCard.addView(Ui.cardTitle(this, "লক শিডিউল"))
+        scheduleCard.addView(Ui.cardTitle(this, Lang.t(this, "card_schedules")))
         scheduleCard.addView(Ui.label(this, "ঐচ্ছিক — প্রতিদিন একই সময়ে অটো লক"))
         scheduleList(scheduleCard)
         scheduleCard.addView(Ui.secondaryButton(this, "নতুন শিডিউল যোগ করো") { addScheduleFlow() })
@@ -483,7 +492,7 @@ class MainActivity : AppCompatActivity() {
     // ---- Tab 3: App limits ----
     private fun tabLimits(content: LinearLayout) {
         val limitsCard = Ui.card(this)
-        limitsCard.addView(Ui.cardTitle(this, "অ্যাপ লিমিট"))
+        limitsCard.addView(Ui.cardTitle(this, Lang.t(this, "card_app_limits")))
         limitsCard.addView(Ui.label(this, "প্রতিদিনের সীমা — পার হলেই সেদিনের জন্য বন্ধ"))
         appLimitList(limitsCard)
         limitsCard.addView(Ui.secondaryButton(this, "অ্যাপে লিমিট বসাও") { addLimitFlow() })
@@ -491,7 +500,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Blocked websites (v1.4, Chrome) ----
         val siteCard = Ui.card(this)
-        siteCard.addView(Ui.cardHeader(this, "ওয়েবসাইট ব্লক") {
+        siteCard.addView(Ui.cardHeader(this, Lang.t(this, "card_site_block")) {
             showScrollableDialog("ওয়েবসাইট ব্লক", "Device Owner চালু থাকলে Chrome নিজেই ব্লক/Allow তালিকা মানে — ইনকগনিটো বন্ধ থাকে, SafeSearch জোর করে চালু থাকে। Allow তালিকার সাইট কখনো ব্লক হয় না — ব্লক তালিকা বা ক্যাটাগরিতে থাকলেও চলবে।")
         })
         siteCard.addView(Ui.label(this, "যেকোনো ব্রাউজারে এই সাইটগুলো খুললেই সঙ্গে সঙ্গে ব্লক"))
@@ -658,10 +667,80 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---- Tab 4: Settings — permissions, security, backup, log ----
+    /** v1.15.0 (Tamim's ask, same as OwnerControl): language + theme
+     *  pickers. Both are pure appearance — no lock behaviour depends on
+     *  them, so they change instantly with no PIN. Names/details of the
+     *  card itself follow the chosen language; the pickers' own labels
+     *  stay readable in every language (native names). */
+    private fun appearanceCard(content: LinearLayout) {
+        val card = Ui.card(this)
+        card.addView(Ui.cardTitle(this, Lang.t(this, "appearance")))
+        card.addView(Ui.label(this, Lang.t(this, "language")))
+        val curLang = Store.appLang(this)
+        for ((code, name) in Lang.LANGS) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, Ui.dp(this@MainActivity, 7), 0, Ui.dp(this@MainActivity, 7))
+                addView(Ui.body(this@MainActivity, name),
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Ui.chip(this@MainActivity, if (code == curLang) "●" else "○", code == curLang))
+                setOnClickListener {
+                    if (code != curLang) { Store.setAppLang(this@MainActivity, code); buildUi() }
+                }
+            }
+            card.addView(row)
+        }
+        card.addView(Ui.gap(this, 6))
+        card.addView(Ui.label(this, Lang.t(this, "theme")))
+        val curTheme = Store.themeId(this)
+        var rowBox: LinearLayout? = null
+        Themes.ALL.forEachIndexed { idx, th ->
+            if (idx % 2 == 0) {
+                rowBox = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 4))
+                }
+                card.addView(rowBox)
+            }
+            val cell = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 6),
+                    Ui.dp(this@MainActivity, 6), Ui.dp(this@MainActivity, 6))
+                val swatch = android.view.View(this@MainActivity).apply {
+                    background = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+                        if (th.bgStops.size > 1) th.bgStops else intArrayOf(th.bg, th.accent)
+                    ).apply { cornerRadius = Ui.dp(this@MainActivity, 12).toFloat() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this@MainActivity, 40))
+                }
+                addView(swatch)
+                addView(TextView(this@MainActivity).apply {
+                    text = (if (th.id == curTheme) "✓ " else "") + th.displayName
+                    textSize = 12f
+                    setTextColor(if (th.id == curTheme) Ui.ACCENT else Ui.SECONDARY)
+                    gravity = android.view.Gravity.CENTER
+                    setPadding(0, Ui.dp(this@MainActivity, 4), 0, 0)
+                })
+                setOnClickListener {
+                    if (th.id != curTheme) {
+                        Store.setThemeId(this@MainActivity, th.id)
+                        Themes.apply(th.id)
+                        buildUi()
+                    }
+                }
+            }
+            rowBox?.addView(cell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        content.addView(card)
+    }
+
     private fun tabSettings(content: LinearLayout) {
+        appearanceCard(content)
         // ALL permission settings in ONE dedicated card (Tamim's request).
         val permCard = Ui.card(this)
-        permCard.addView(Ui.cardTitle(this, "পারমিশন সেটিংস"))
+        permCard.addView(Ui.cardTitle(this, Lang.t(this, "card_perm_settings")))
         permCard.addView(Ui.label(this, "সব পারমিশন এক জায়গায়"))
         permCard.addView(Ui.statusRow(this, "Accessibility (অ্যাপ ব্লকার)", AdminHelper.isAccessibilityOn(this)))
         if (!AdminHelper.isAccessibilityOn(this)) {
@@ -776,7 +855,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val securityCard = Ui.card(this)
-        securityCard.addView(Ui.cardHeader(this, "সুরক্ষা") {
+        securityCard.addView(Ui.cardHeader(this, Lang.t(this, "card_security")) {
             showScrollableDialog("সুরক্ষা",
                 "জরুরি বের-হওয়ার পথ: Owner সরালে আগে সব restriction উঠবে, suspend/hide করা অ্যাপ ফিরবে, তারপর Owner যাবে — কোনো অ্যাপ আটকে থাকবে না।\n\n" +
                     "অ্যাকাউন্ট ব্লক: চালু থাকলে Settings থেকে Google বা অন্য কোনো অ্যাকাউন্ট যোগ করা বা মোছা যাবে না। অ্যাপের ভেতরের লগইন আগের মতোই চলবে।\n\n" +
@@ -996,25 +1075,25 @@ class MainActivity : AppCompatActivity() {
         val netCard = Ui.card(this)
         netCard.addView(Ui.cardHeader(this, "নেটওয়ার্ক সুরক্ষা (Device Owner)") {
             showScrollableDialog("নেটওয়ার্ক সুরক্ষা",
-                "DNS ফিল্টার: সব অ্যাপের ইন্টারনেট family.cloudflare-dns.com দিয়ে যায় — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যায়। কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে।\n\n" +
+                "DNS ফিল্টার: সব অ্যাপের ইন্টারনেট বেছে-নেওয়া ফিল্টার-DNS (Cloudflare Family / AdGuard / CleanBrowsing / নিজের পছন্দ) দিয়ে যায় — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যায়। ফিল্টার চালু থাকা অবস্থায় সমমানের ফ্যামিলি সার্ভিসে বদলানো সাথে সাথে হয়; দুর্বল বা অজানা ফিল্টারে বদলাতে PIN + 24 ঘণ্টা লাগে। কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে।\n\n" +
                     "নেটওয়ার্ক লক: ফোকাস সেশন বা শিডিউল-লক চলাকালে WiFi, হটস্পট ও এয়ারপ্লেন মোডের সেটিংস বদলানো যায় না — লক শেষ হলেই আবার খুলে যায়। সংযোগ বন্ধ হয় না, শুধু বদলানো আটকায়; তবে এই সময়ে নতুন WiFi নেটওয়ার্কেও যোগ দেওয়া যায় না।")
         })
         val dnsOn = Store.dnsFilterOn(this)
         netCard.addView(Ui.statusRow(this, "DNS ফিল্টার (পরিবার-বান্ধব)", dnsOn))
         netCard.addView(Ui.secondary(this, when {
             !ownerActive -> "Device Owner চালু হলে কার্যকর হবে — এখন পছন্দগুলো শুধু সংরক্ষিত থাকবে।"
-            dnsOn -> "কার্যকর আছে — সব অ্যাপের ইন্টারনেট যাচ্ছে family.cloudflare-dns.com দিয়ে; প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট DNS স্তরেই আটকে যায়।"
+            dnsOn -> "কার্যকর আছে — সব অ্যাপের ইন্টারনেট যাচ্ছে ${AdminHelper.dnsHost(this)} দিয়ে; প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট DNS স্তরেই আটকে যায়।"
             else -> "Device Owner চালু আছে — DNS ফিল্টার এখন বন্ধ।"
         }))
         if (!dnsOn) {
             netCard.addView(Ui.primaryButton(this, "DNS ফিল্টার চালু করো") {
                 AlertDialog.Builder(this)
                     .setTitle("DNS ফিল্টার চালু করবে?")
-                    .setMessage("চালু হলে ফোনের সব অ্যাপের ইন্টারনেট Cloudflare-এর পরিবার-বান্ধব DNS (family.cloudflare-dns.com) দিয়ে যাবে — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যাবে। একটা কথা: কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে — ওই সময় দরকার হলে ফিল্টার বন্ধ করতে হবে, আর বন্ধ করা দুর্বলীকরণ বলে PIN + 24 ঘণ্টা লাগবে। সত্যিই চালু করবে?")
+                    .setMessage("চালু হলে ফোনের সব অ্যাপের ইন্টারনেট বেছে-নেওয়া DNS (${AdminHelper.dnsProvider(this).label} — ${AdminHelper.dnsHost(this)}) দিয়ে যাবে — প্রাপ্তবয়স্ক ও ক্ষতিকর সাইট শুধু Chrome-এ নয়, সব অ্যাপেই DNS স্তরে আটকে যাবে। একটা কথা: কিছু পাবলিক WiFi-এর লগইন পেজ এই ফিল্টার চালু থাকলে খুলতে নাও পারে — ওই সময় দরকার হলে ফিল্টার বন্ধ করতে হবে, আর বন্ধ করা দুর্বলীকরণ বলে PIN + 24 ঘণ্টা লাগবে। সত্যিই চালু করবে?")
                     .setPositiveButton("চালু করো") { _, _ ->
                         Store.setDnsFilterOn(this, true)
                         AdminHelper.applyDnsFilter(this)
-                        Store.logTamper(this, "DNS filter turned ON (family.cloudflare-dns.com)")
+                        Store.logTamper(this, "DNS filter turned ON (${AdminHelper.dnsHost(this)})")
                         toast(if (ownerActive) "DNS ফিল্টার চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
                         buildUi()
                     }
@@ -1026,6 +1105,29 @@ class MainActivity : AppCompatActivity() {
                     requestWeakening("dns_filter_off", "DNS ফিল্টার বন্ধ করা")
                 }
             })
+        }
+        // v1.15.0: DNS provider picker (Tamim: AdGuard-ও যেন use করা যায়).
+        netCard.addView(Ui.gap(this, 6))
+        netCard.addView(Ui.label(this, "DNS সার্ভিস"))
+        val curProvider = AdminHelper.dnsProvider(this)
+        for (p in AdminHelper.DNS_PROVIDERS) {
+            val hostText = if (p.id == "custom") {
+                Store.dnsCustomHost(this).ifBlank { "হোস্ট সেট করা হয়নি" }
+            } else p.host
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+                val texts = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(Ui.body(this@MainActivity, p.label))
+                    addView(Ui.label(this@MainActivity, hostText))
+                }
+                addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Ui.chip(this@MainActivity, if (p.id == curProvider.id) "●" else "○", p.id == curProvider.id))
+                setOnClickListener { chooseDnsProvider(p) }
+            }
+            netCard.addView(row)
         }
         netCard.addView(Ui.gap(this, 8))
         val netLockOn = Store.networkLockOn(this)
@@ -1186,7 +1288,7 @@ class MainActivity : AppCompatActivity() {
 
         // ---- Settings backup / restore (v1.4) ----
         val backupCard = Ui.card(this)
-        backupCard.addView(Ui.cardHeader(this, "সেটিংস ব্যাকআপ") {
+        backupCard.addView(Ui.cardHeader(this, Lang.t(this, "card_backup")) {
             showScrollableDialog("সেটিংস ব্যাকআপ", "নতুন সংস্করণ বসাতে আনইনস্টল করলে সেটিংস মুছে যায়। ব্যাকআপ ফাইল রাখলে এক ট্যাপে শিডিউল, লিমিট, প্রিসেট, সাইট-ব্লক সব ফিরে আসবে। (PIN ব্যাকআপে থাকে না — আবার সেট করতে হবে।)")
         })
         backupCard.addView(Ui.secondaryButton(this, "ব্যাকআপ নাও (ফাইলে সেভ করো)") {
@@ -1198,7 +1300,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(backupCard)
 
         val logCard = Ui.card(this)
-        logCard.addView(Ui.cardTitle(this, "ট্যাম্পার লগ"))
+        logCard.addView(Ui.cardTitle(this, Lang.t(this, "card_tamper_log")))
         val log = Store.tamperLog(this)
         logCard.addView(Ui.secondary(this,
             if (log.isBlank()) "এখনো কোনো চেষ্টা হয়নি।"
@@ -1734,6 +1836,71 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("বন্ধ করো", null).show()
     }
 
+    /** v1.15.0: DNS provider switching rules.
+     *  - Filter OFF: any provider is just a saved preference.
+     *  - Filter ON + family-grade provider: equivalent strength, applies
+     *    immediately (re-pointed + read-back verified in applyDnsFilter).
+     *  - Filter ON + weaker/unknown filtering (AdGuard Default, Custom):
+     *    weakening — PIN + 24h via the dns_provider pending action. */
+    private fun chooseDnsProvider(p: AdminHelper.DnsProvider) {
+        val dnsOn = Store.dnsFilterOn(this)
+        if (p.id == "custom") {
+            val input = android.widget.EditText(this).apply {
+                hint = "dns.example.com"
+                setText(Store.dnsCustomHost(this@MainActivity))
+                setTextColor(Ui.TEXT)
+                setHintTextColor(Ui.MUTED)
+            }
+            AlertDialog.Builder(this)
+                .setTitle("নিজের DNS হোস্ট")
+                .setMessage("Private DNS হোস্টনেমটা লেখো। ফিল্টার চালু থাকা অবস্থায় Custom-এ বদলানো দুর্বলীকরণ — PIN + 24 ঘণ্টা লাগবে।")
+                .setView(input)
+                .setPositiveButton("সেভ করো") { _, _ ->
+                    val host = input.text.toString().trim()
+                    if (host.isBlank() || host.contains(" ") || !host.contains(".")) {
+                        toast("সঠিক হোস্টনেম লেখো")
+                        return@setPositiveButton
+                    }
+                    if (!dnsOn) {
+                        Store.setDnsCustomHost(this, host)
+                        Store.setDnsProvider(this, "custom")
+                        toast("Custom DNS সেভ হয়েছে — ফিল্টার চালু হলেই কার্যকর")
+                        buildUi()
+                    } else if (Store.dnsProvider(this) == "custom" && Store.dnsCustomHost(this) == host) {
+                        toast("এটাই এখনকার Custom হোস্ট")
+                    } else {
+                        verifyPin {
+                            Store.setPendingDnsCustomHost(this, host)
+                            requestWeakening("dns_provider:custom", "DNS সার্ভিস বদলানো (Custom: $host)")
+                        }
+                    }
+                }
+                .setNegativeButton("বাতিল", null).show()
+            return
+        }
+        if (Store.dnsProvider(this) == p.id) {
+            toast("এই সার্ভিসটাই এখন বেছে নেওয়া আছে")
+            return
+        }
+        when {
+            !dnsOn -> {
+                Store.setDnsProvider(this, p.id)
+                toast("সেভ হয়েছে — ফিল্টার চালু হলেই ${p.label} কার্যকর হবে")
+                buildUi()
+            }
+            p.family -> {
+                Store.setDnsProvider(this, p.id)
+                AdminHelper.applyDnsFilter(this, force = true)
+                Store.logTamper(this, "DNS provider changed to ${p.label} (${p.host})")
+                toast("DNS সার্ভিস এখন ${p.label}")
+                buildUi()
+            }
+            else -> verifyPin {
+                requestWeakening("dns_provider:${p.id}", "DNS সার্ভিস বদলানো (${p.label})")
+            }
+        }
+    }
+
     private fun verifyPin(then: () -> Unit) {
         if (!Store.hasPin(this)) {
             toast("আগে PIN সেট করতে হবে")
@@ -1781,6 +1948,11 @@ class MainActivity : AppCompatActivity() {
         action == "allow_only_off" -> "শুধু-Allow মোড বন্ধ করা"
         action == "install_block_off" -> "ইনস্টল ব্লক বন্ধ করা"
         action == "dns_filter_off" -> "DNS ফিল্টার বন্ধ করা"
+        action.startsWith("dns_provider:") -> {
+            val id = action.removePrefix("dns_provider:")
+            val label = AdminHelper.DNS_PROVIDERS.firstOrNull { it.id == id }?.label ?: id
+            "DNS সার্ভিস বদলানো: $label"
+        }
         action == "network_lock_off" -> "নেটওয়ার্ক লক বন্ধ করা"
         action == "keyguard_hardening_off" -> "লক স্ক্রিন হার্ডেনিং বন্ধ করা"
         action == "account_block_off" -> "অ্যাকাউন্ট ব্লক বন্ধ করা"

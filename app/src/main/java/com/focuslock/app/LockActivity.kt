@@ -81,7 +81,7 @@ class LockActivity : Activity() {
             when (state) {
                 is BlockState.Full -> {
                     reasonView.text = state.reason
-                    countdown.text = "বাকি: ${Blocker.formatRemaining(state.untilMs)}"
+                    countdown.text = "${Lang.t(this@LockActivity, "lock_remaining")}: ${Blocker.formatRemaining(state.untilMs)}"
                     handler.postDelayed(this, 1000)
                 }
                 is BlockState.FocusSession -> {
@@ -95,27 +95,27 @@ class LockActivity : Activity() {
                         moveTaskToBack(true)
                         handler.postDelayed(this, 1000)
                     } else if (state.allowed.isEmpty()) {
-                        reasonView.text = "ফোকাস সেশন চলছে — পুরো ফোন লক"
-                        countdown.text = "বাকি: ${Blocker.formatRemaining(state.untilMs)}"
+                        reasonView.text = Lang.t(this@LockActivity, "lock_focus_running")
+                        countdown.text = "${Lang.t(this@LockActivity, "lock_remaining")}: ${Blocker.formatRemaining(state.untilMs)}"
                         handler.postDelayed(this, 1000)
                     } else {
-                        reasonView.text = "ফোকাস চলছে — এই অ্যাপটা বাছাই করা হয়নি"
-                        countdown.text = "বাকি: ${Blocker.formatRemaining(state.untilMs)}"
+                        reasonView.text = Lang.t(this@LockActivity, "lock_focus_not_picked")
+                        countdown.text = "${Lang.t(this@LockActivity, "lock_remaining")}: ${Blocker.formatRemaining(state.untilMs)}"
                         handler.postDelayed(this, 1000)
                     }
                 }
                 is BlockState.SiteBlocked -> {
                     lockedPkg = Store.siteBlockPkg
-                    reasonView.text = "এই ওয়েবসাইটটা ব্লক করা: ${state.host}"
-                    countdown.text = "Home চেপে বেরিয়ে যাও — এই সাইটটা খোলা যাবে না"
+                    reasonView.text = "${Lang.t(this@LockActivity, "lock_site_blocked")}: ${state.host}"
+                    countdown.text = Lang.t(this@LockActivity, "lock_press_home")
                     handler.postDelayed(this, 500)
                     // v1.4.2: exit only on a genuine leave (see userGenuinelyLeft).
                     if (userGenuinelyLeft()) finishLock()
                 }
                 is BlockState.AppBlocked -> {
                     lockedPkg = state.pkg
-                    reasonView.text = "এই অ্যাপের আজকের সময় শেষ"
-                    countdown.text = "কাল আবার ব্যবহার করা যাবে"
+                    reasonView.text = Lang.t(this@LockActivity, "lock_app_time_over")
+                    countdown.text = Lang.t(this@LockActivity, "lock_tomorrow")
                     handler.postDelayed(this, 2000)
                     if (userGenuinelyLeft()) finishLock()
                 }
@@ -134,6 +134,11 @@ class LockActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v1.15.0: the lock screen follows the chosen theme + language too.
+        Themes.apply(Store.themeId(this))
+        if (Lang.isRtl(this)) {
+            window.decorView.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL
+        }
         // v1.4 stability: ONLY show-when-locked. No turn-screen-on (that is
         // what lit the screen back up and made the lock look like it was
         // toggling), no keep-screen-on, no keyguard dismiss — the activity
@@ -157,7 +162,7 @@ class LockActivity : Activity() {
             textSize = 20f; gravity = Gravity.CENTER; setTextColor(Ui.TEXT)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             setPadding(0, Ui.dp(this@LockActivity, 8), 0, 0)
-            text = "লক টাইম"
+            text = Lang.t(this@LockActivity, "lock_time")
         }
         countdown = TextView(this).apply {
             textSize = 14f; gravity = Gravity.CENTER; setTextColor(Ui.BRIGHT)
@@ -168,7 +173,7 @@ class LockActivity : Activity() {
         card.addView(countdown)
         root.addView(card)
 
-        root.addView(Ui.secondaryButton(this, "জরুরি কল") {
+        root.addView(Ui.secondaryButton(this, Lang.t(this, "lock_emergency")) {
             // v1.10.0 bug fix: this button used to just fire the intent and
             // stay in front, relying on other guards to let the dialer
             // through — on XOS they didn't (see Blocker.alwaysAllowed), so
@@ -188,7 +193,7 @@ class LockActivity : Activity() {
                 if (lockTaskStarted) moveTaskToBack(true) else finish()
             } catch (_: Exception) { }
         })
-        root.addView(Ui.secondaryButton(this, "অ্যালার্ম / ঘড়ি") {
+        root.addView(Ui.secondaryButton(this, Lang.t(this, "lock_alarm")) {
             try {
                 val clockPkg = packageManager
                     .resolveActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS), 0)
@@ -219,7 +224,7 @@ class LockActivity : Activity() {
         val sessionAllowed = Store.focusSessionAllowed(this)
         if (sessionAllowed.isNotEmpty() && Store.focusEndMs(this) > System.currentTimeMillis()) {
             root.addView(Ui.gap(this, 16))
-            root.addView(Ui.label(this, "এই সেশনে যেগুলো চলবে").apply { gravity = Gravity.CENTER })
+            root.addView(Ui.label(this, Lang.t(this, "lock_session_apps")).apply { gravity = Gravity.CENTER })
             for (pkg in sessionAllowed.sorted()) {
                 root.addView(Ui.secondaryButton(this, appLabel(pkg)) {
                     val launch = packageManager.getLaunchIntentForPackage(pkg)

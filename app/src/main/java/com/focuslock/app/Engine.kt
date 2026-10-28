@@ -55,6 +55,9 @@ object Engine {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun tick(ctx: Context) {
+        // v1.15.0: keep the guard-strip colours on the chosen theme even
+        // when the process was restarted by the service, not the UI.
+        Themes.apply(Store.themeId(ctx))
         val app = ctx.applicationContext
         try {
             enforce(app)

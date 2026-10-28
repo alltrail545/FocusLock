@@ -248,6 +248,19 @@ object Store {
                 setDnsFilterOn(ctx, false)
                 AdminHelper.applyDnsFilter(ctx)
             }
+            action.startsWith("dns_provider:") -> {
+                // v1.15.0: weakening provider switch (weaker/unknown
+                // filtering) requested 24h ago — now it takes effect and
+                // Private DNS is re-pointed in the same tick.
+                val id = action.removePrefix("dns_provider:")
+                if (id == "custom") {
+                    val h = pendingDnsCustomHost(ctx)
+                    if (h.isNotBlank()) setDnsCustomHost(ctx, h)
+                    setPendingDnsCustomHost(ctx, "")
+                }
+                setDnsProvider(ctx, id)
+                AdminHelper.applyDnsFilter(ctx, force = true)
+            }
             action == "network_lock_off" -> {
                 // v1.11.0: only the DESIRED flag changes here. Whether the
                 // three network restrictions are actually in force depends
@@ -499,6 +512,46 @@ object Store {
         else ed.putBoolean("dns_filter_applied", on)
         ed.apply()
     }
+
+    /** v1.15.0: which filtered-DNS provider the filter points at
+     *  ("cloudflare" | "adguard_family" | "adguard_default" |
+     *  "cleanbrowsing" | "custom" — see AdminHelper.DNS_PROVIDERS).
+     *  Family-grade switches apply immediately; switching to a weaker or
+     *  unknown filter while the filter is ON is weakening and goes
+     *  through the "dns_provider:<id>" pending action. */
+    fun dnsProvider(ctx: Context): String =
+        prefs(ctx).getString("dns_provider", "cloudflare") ?: "cloudflare"
+
+    fun setDnsProvider(ctx: Context, id: String) =
+        prefs(ctx).edit().putString("dns_provider", id).apply()
+
+    fun dnsCustomHost(ctx: Context): String =
+        prefs(ctx).getString("dns_custom_host", "") ?: ""
+
+    fun setDnsCustomHost(ctx: Context, host: String) =
+        prefs(ctx).edit().putString("dns_custom_host", host.trim()).apply()
+
+    /** Custom host captured when a weakening provider change was
+     *  requested; consumed by the dns_provider pending action. */
+    fun pendingDnsCustomHost(ctx: Context): String =
+        prefs(ctx).getString("pending_dns_custom_host", "") ?: ""
+
+    fun setPendingDnsCustomHost(ctx: Context, host: String) =
+        prefs(ctx).edit().putString("pending_dns_custom_host", host.trim()).apply()
+
+    // ---- v1.15.0: appearance (theme + language) ----
+
+    fun themeId(ctx: Context): String =
+        prefs(ctx).getString("ui_theme", "classic_glass") ?: "classic_glass"
+
+    fun setThemeId(ctx: Context, id: String) =
+        prefs(ctx).edit().putString("ui_theme", id).apply()
+
+    fun appLang(ctx: Context): String =
+        prefs(ctx).getString("ui_lang", "bn") ?: "bn"
+
+    fun setAppLang(ctx: Context, code: String) =
+        prefs(ctx).edit().putString("ui_lang", code).apply()
 
     /** Lock WiFi / tethering / airplane-mode SETTINGS during a hard lock
      *  (Full schedule lock or focus session). Default ON: it only ever
@@ -766,6 +819,8 @@ object Store {
         o.put("install_block_on", installBlockOn(ctx))
         o.put("uninstall_protected_pkgs", org.json.JSONArray(uninstallProtectedPkgs(ctx).toList()))
         o.put("dns_filter_on", dnsFilterOn(ctx))
+        o.put("dns_provider", dnsProvider(ctx))
+        o.put("dns_custom_host", dnsCustomHost(ctx))
         o.put("network_lock_on", networkLockOn(ctx))
         // v1.12.0 batch. NOTE: frp_email is deliberately NOT exported —
         // it is an account identifier, like the PIN and the automation
@@ -808,6 +863,8 @@ object Store {
             bool("site_allow_only")?.let { setSiteAllowOnly(ctx, it) }
             bool("install_block_on")?.let { setInstallBlockOn(ctx, it) }
             bool("dns_filter_on")?.let { setDnsFilterOn(ctx, it) }
+            if (o.opt("dns_provider") is String) setDnsProvider(ctx, o.getString("dns_provider"))
+            if (o.opt("dns_custom_host") is String) setDnsCustomHost(ctx, o.getString("dns_custom_host"))
             bool("network_lock_on")?.let { setNetworkLockOn(ctx, it) }
             strings("uninstall_protected_pkgs")?.let { list ->
                 // Same exclusions as the picker: FocusLock itself and the

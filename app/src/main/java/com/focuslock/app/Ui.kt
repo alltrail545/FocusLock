@@ -20,21 +20,25 @@ import android.widget.TextView
  * live behind the ⓘ info button, not on the surface.
  */
 object Ui {
-    /** Deep indigo — the solid fallback behind the aurora gradient. */
-    val BG = Color.parseColor("#160B36")
-    /** Glass card fill: translucent white. */
-    val CARD = Color.argb(43, 255, 255, 255)
+    // v1.15.0: every token now reads the CURRENT theme (Themes.apply is
+    // called at each UI entry point from Store.themeId). The classic_glass
+    // theme's values are exactly the old constants, so the default look
+    // is unchanged; all existing Ui.X references follow the theme.
+    /** Solid fallback behind the aurora gradient. */
+    val BG: Int get() = Themes.current.bg
+    /** Glass card fill. */
+    val CARD: Int get() = Themes.current.card
     /** Stronger glass: raised surfaces, tracks, inactive chips. */
-    val RAISED = Color.argb(64, 255, 255, 255)
+    val RAISED: Int get() = Themes.current.raised
     /** Bright glass edge. */
-    val STROKE = Color.argb(115, 255, 255, 255)
-    /** Pink accent (progress, active states). */
-    val ACCENT = Color.parseColor("#E879C6")
-    /** Light aurora blue (secondary highlights). */
-    val BRIGHT = Color.parseColor("#A5C8FF")
-    val TEXT = Color.parseColor("#FFFFFF")
-    val SECONDARY = Color.parseColor("#DCD6F7")
-    val MUTED = Color.parseColor("#ACA3D9")
+    val STROKE: Int get() = Themes.current.stroke
+    /** Accent (progress, active states). */
+    val ACCENT: Int get() = Themes.current.accent
+    /** Secondary highlight colour. */
+    val BRIGHT: Int get() = Themes.current.bright
+    val TEXT: Int get() = Themes.current.text
+    val SECONDARY: Int get() = Themes.current.secondary
+    val MUTED: Int get() = Themes.current.muted
 
     fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
 
@@ -46,11 +50,11 @@ object Ui {
             if (stroke) setStroke(dp(ctx, 1), STROKE)
         }
 
-    /** Violet → pink gradient fill (primary actions, progress). */
+    /** Theme gradient fill (primary actions, progress). */
     private fun accentGradient(ctx: Context, radiusDp: Int): GradientDrawable =
         GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT,
-            intArrayOf(Color.parseColor("#8B5CF6"), Color.parseColor("#EC6BD8"))
+            intArrayOf(Themes.current.gradientStart, Themes.current.gradientEnd)
         ).apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(ctx, radiusDp).toFloat()
@@ -63,32 +67,26 @@ object Ui {
      */
     fun aurora(ctx: Context): android.graphics.drawable.Drawable {
         return try {
+            val t = Themes.current
             val w = ctx.resources.displayMetrics.widthPixels.toFloat()
             val base = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(
-                    Color.parseColor("#160A33"),
-                    Color.parseColor("#3B1470"),
-                    Color.parseColor("#7C2D92"),
-                    Color.parseColor("#C2439D"),
-                    Color.parseColor("#241259")
-                )
+                t.bgStops
             )
-            val glowPink = GradientDrawable().apply {
+            if (t.isLight || t.bgStops.size == 1) {
+                return base
+            }
+            fun glow(color: Int, alpha: Int, cx: Float, cy: Float) = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 gradientType = GradientDrawable.RADIAL_GRADIENT
-                setGradientCenter(0.88f, 0.10f)
+                setGradientCenter(cx, cy)
                 gradientRadius = w * 1.05f
-                colors = intArrayOf(Color.argb(110, 232, 121, 198), Color.argb(0, 232, 121, 198))
+                colors = intArrayOf(
+                    Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color)),
+                    Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
+                )
             }
-            val glowBlue = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                gradientType = GradientDrawable.RADIAL_GRADIENT
-                setGradientCenter(0.08f, 0.92f)
-                gradientRadius = w * 1.05f
-                colors = intArrayOf(Color.argb(90, 56, 189, 248), Color.argb(0, 56, 189, 248))
-            }
-            LayerDrawable(arrayOf(base, glowPink, glowBlue))
+            LayerDrawable(arrayOf(base, glow(t.accent, 110, 0.88f, 0.10f), glow(t.bright, 90, 0.08f, 0.92f)))
         } catch (_: Throwable) {
             android.graphics.drawable.ColorDrawable(BG)
         }
@@ -237,14 +235,15 @@ object Ui {
         return track
     }
 
-    /** One status row: name on the left, chip on the right. */
-    fun statusRow(ctx: Context, name: String, on: Boolean, onText: String = "চালু", offText: String = "বন্ধ"): LinearLayout =
+    /** One status row: name on the left, chip on the right. Default
+     *  on/off chip texts follow the app language (v1.15.0). */
+    fun statusRow(ctx: Context, name: String, on: Boolean, onText: String? = null, offText: String? = null): LinearLayout =
         LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(ctx, 5), 0, dp(ctx, 5))
             addView(body(ctx, name), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(chip(ctx, if (on) onText else offText, on))
+            addView(chip(ctx, if (on) (onText ?: Lang.t(ctx, "on")) else (offText ?: Lang.t(ctx, "off")), on))
         }
 
     fun gap(ctx: Context, hDp: Int): View = View(ctx).apply {

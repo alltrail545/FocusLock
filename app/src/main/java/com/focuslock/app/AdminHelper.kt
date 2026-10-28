@@ -323,6 +323,35 @@ object AdminHelper {
      *  at DNS level, for EVERY app on the phone — not just Chrome. */
     const val DNS_FILTER_HOST = "family.cloudflare-dns.com"
 
+    /** v1.15.0: selectable filtered-DNS providers (Tamim: "AdGuard-ও যেন
+     *  use করা যায়"). family=true means family-grade filtering (adult +
+     *  malware) — switching between family providers is not weakening.
+     *  adguard_default filters ads/trackers only, and a custom host's
+     *  filtering is unknown, so both count as WEAKER: while the filter is
+     *  ON, switching to them needs PIN + 24h (dns_provider pending). */
+    data class DnsProvider(val id: String, val label: String, val host: String, val family: Boolean)
+
+    val DNS_PROVIDERS: List<DnsProvider> = listOf(
+        DnsProvider("cloudflare", "Cloudflare Family", "family.cloudflare-dns.com", true),
+        DnsProvider("adguard_family", "AdGuard Family", "family.adguard-dns.com", true),
+        DnsProvider("cleanbrowsing", "CleanBrowsing Family", "family-filter-dns.cleanbrowsing.org", true),
+        DnsProvider("adguard_default", "AdGuard Default (শুধু বিজ্ঞাপন/ট্র্যাকার)", "dns.adguard-dns.com", false),
+        DnsProvider("custom", "নিজের পছন্দ (Custom)", "", false)
+    )
+
+    fun dnsProvider(ctx: Context): DnsProvider =
+        DNS_PROVIDERS.firstOrNull { it.id == Store.dnsProvider(ctx) } ?: DNS_PROVIDERS[0]
+
+    /** The host the filter currently points at: the chosen provider's
+     *  host; for "custom", the user's own host (blank falls back to
+     *  Cloudflare Family rather than pointing DNS at nothing). */
+    fun dnsHost(ctx: Context): String {
+        val p = dnsProvider(ctx)
+        return if (p.id == "custom") {
+            Store.dnsCustomHost(ctx).ifBlank { DNS_FILTER_HOST }
+        } else p.host
+    }
+
     // Settings.Global keys for Android Private DNS. The literals are used
     // (they are exactly the values of Settings.Global.PRIVATE_DNS_MODE /
     // PRIVATE_DNS_SPECIFIER) so this compiles against any SDK stub.
@@ -347,11 +376,21 @@ object AdminHelper {
         try {
             if (!isDeviceOwner(ctx)) return
             val want = Store.dnsFilterOn(ctx)
-            if (!force && Store.dnsFilterApplied(ctx) == want) return
+            if (!force && Store.dnsFilterApplied(ctx) == want) {
+                if (!want) return
+                // v1.15.0: the on/off marker alone is not enough any more —
+                // the PROVIDER may have changed (e.g. via backup restore).
+                // A plain Settings.Global read is cheap; only re-apply
+                // when the system still points at the chosen host.
+                val curSpec = try {
+                    Settings.Global.getString(ctx.contentResolver, KEY_PRIVATE_DNS_SPECIFIER)
+                } catch (_: Throwable) { null }
+                if ((curSpec ?: "") == dnsHost(ctx)) return
+            }
             val dpm = dpm(ctx)
             val admin = adminComponent(ctx)
             val mode = if (want) DNS_MODE_HOSTNAME else DNS_MODE_OFF
-            val spec = if (want) DNS_FILTER_HOST else ""
+            val spec = if (want) dnsHost(ctx) else ""
             dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_MODE, mode)
             dpm.setGlobalSetting(admin, KEY_PRIVATE_DNS_SPECIFIER, spec)
             val cr = ctx.contentResolver
