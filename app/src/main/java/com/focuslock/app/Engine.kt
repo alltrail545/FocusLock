@@ -70,6 +70,12 @@ object Engine {
         // the signature guard inside makes this a no-op when nothing
         // changed, and it is a silent no-op without Device Owner.
         AdminHelper.syncBrowserRestrictions(ctx)
+        // v1.10.0: install block + per-app uninstall protections follow
+        // the saved state the same way — a pending change that just
+        // applied above takes DPM effect in this same tick. The
+        // applied-state guards inside AdminHelper mean unchanged state
+        // costs no DPM calls, and without Device Owner it is a no-op.
+        AdminHelper.applyInstallControls(ctx)
         recordFinishedFocus(ctx)
 
         // Midnight rollover: yesterday's suspensions lift, today's limits start fresh.

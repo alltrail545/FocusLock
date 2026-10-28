@@ -169,23 +169,47 @@ class LockActivity : Activity() {
         root.addView(card)
 
         root.addView(Ui.secondaryButton(this, "জরুরি কল") {
-            // Dialer is whitelisted in LockTask, so this opens and returns here after.
-            startActivity(Intent(Intent.ACTION_DIAL).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
+            // v1.10.0 bug fix: this button used to just fire the intent and
+            // stay in front, relying on other guards to let the dialer
+            // through — on XOS they didn't (see Blocker.alwaysAllowed), so
+            // the dialer never appeared. Now it steps aside exactly like the
+            // study-app buttons below: record the dialer as the foreground
+            // app, launch it, then move this lock to the back (or finish —
+            // the engine will not relaunch the lock while an always-allowed
+            // app is in front, and the lock returns when the dialer closes).
+            try {
+                val dialerPkg = AdminHelper.dialerPackage(this)
+                    ?: packageManager.resolveActivity(Intent(Intent.ACTION_DIAL), 0)
+                        ?.activityInfo?.packageName
+                if (dialerPkg != null) Store.lastForegroundPkg = dialerPkg
+                startActivity(Intent(Intent.ACTION_DIAL).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                if (lockTaskStarted) moveTaskToBack(true) else finish()
+            } catch (_: Exception) { }
         })
         root.addView(Ui.secondaryButton(this, "অ্যালার্ম / ঘড়ি") {
             try {
+                val clockPkg = packageManager
+                    .resolveActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS), 0)
+                    ?.activityInfo?.packageName
+                    ?: AdminHelper.clockPackages(this).firstOrNull()
+                if (clockPkg != null) Store.lastForegroundPkg = clockPkg
                 startActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 })
+                if (lockTaskStarted) moveTaskToBack(true) else finish()
             } catch (e: Exception) {
                 try {
                     // v1.8.0 audit: was a force-unwrap (!!) on a nullable
                     // launch intent — the only one in the codebase. It was
                     // inside a try/catch, but a safe call says what it does.
                     packageManager.getLaunchIntentForPackage("com.google.android.deskclock")
-                        ?.let { startActivity(it) }
+                        ?.let {
+                            Store.lastForegroundPkg = "com.google.android.deskclock"
+                            startActivity(it)
+                            if (lockTaskStarted) moveTaskToBack(true) else finish()
+                        }
                 } catch (_: Exception) { }
             }
         })

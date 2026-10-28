@@ -729,6 +729,105 @@ class MainActivity : AppCompatActivity() {
         })
         content.addView(securityCard)
 
+        // ---- v1.10.0: app install / uninstall control (Device Owner) ----
+        // Strengthening is immediate (install block ON, adding uninstall
+        // protection); every weakening goes through PIN + 24h pending
+        // (install_block_off / uninstall_unprotect:<pkg>). Without Device
+        // Owner the choices still save — they take effect the moment
+        // owner is active, and the card says so plainly.
+        val installCard = Ui.card(this)
+        installCard.addView(Ui.cardTitle(this, "অ্যাপ ইনস্টল ও আনইনস্টল (Device Owner)"))
+        val ownerActive = AdminHelper.isDeviceOwner(this)
+        val installBlock = Store.installBlockOn(this)
+        installCard.addView(Ui.statusRow(this, "নতুন অ্যাপ ইনস্টল ব্লক", installBlock))
+        installCard.addView(Ui.secondary(this, when {
+            !ownerActive -> "Device Owner চালু হলে কার্যকর হবে — এখন পছন্দগুলো শুধু সংরক্ষিত থাকবে।"
+            installBlock -> "কার্যকর আছে — নতুন কোনো অ্যাপ ইনস্টল হবে না (FocusLock-এর আপডেটও না)।"
+            else -> "Device Owner চালু আছে — ইনস্টল ব্লক এখন বন্ধ।"
+        }))
+        if (!installBlock) {
+            installCard.addView(Ui.primaryButton(this, "ইনস্টল ব্লক চালু করো") {
+                AlertDialog.Builder(this)
+                    .setTitle("ইনস্টল ব্লক চালু করবে?")
+                    .setMessage("সাবধান: চালু থাকলে নতুন কোনো অ্যাপ ইনস্টল করা যাবে না — Play Store থেকেও না, APK ফাইল থেকেও না, আর অন্য অ্যাপের আপডেটও আটকে থাকবে। এমনকি FocusLock-এর নিজের আপডেটও ইনস্টল হবে না। তাই FocusLock আপডেটের আগে এই ব্লক বন্ধ করতে হবে — বন্ধ করা দুর্বলীকরণ, তাই PIN + 24 ঘণ্টা সময় লাগবে। সত্যিই চালু করবে?")
+                    .setPositiveButton("চালু করো") { _, _ ->
+                        Store.setInstallBlockOn(this, true)
+                        AdminHelper.applyInstallControls(this)
+                        Store.logTamper(this, "Install block turned ON")
+                        toast(if (ownerActive) "ইনস্টল ব্লক চালু হয়েছে" else "সংরক্ষিত হয়েছে — Owner চালু হলেই কার্যকর হবে")
+                        buildUi()
+                    }
+                    .setNegativeButton("বাতিল", null).show()
+            })
+        } else {
+            installCard.addView(Ui.secondaryButton(this, "ইনস্টল ব্লক বন্ধ করার আবেদন (24 ঘণ্টা লাগবে)") {
+                verifyPin {
+                    requestWeakening("install_block_off", "ইনস্টল ব্লক বন্ধ করা")
+                }
+            })
+        }
+        installCard.addView(Ui.gap(this, 8))
+        installCard.addView(Ui.body(this, "আনইনস্টল-সুরক্ষিত অ্যাপ"))
+        val protectedPkgs = Store.uninstallProtectedPkgs(this).sorted()
+        if (protectedPkgs.isEmpty()) {
+            installCard.addView(Ui.secondary(this, "কোনো অ্যাপ সুরক্ষিত নেই। এখানে যোগ করা অ্যাপ আনইনস্টল করা যাবে না।"))
+        } else {
+            for (pkg in protectedPkgs) {
+                val label = appLabel(pkg)
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 6))
+                }
+                row.addView(TextView(this).apply {
+                    text = label
+                    textSize = 14f; setTextColor(Ui.TEXT)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(Button(this).apply {
+                    text = "সুরক্ষা তোলো"; isAllCaps = false; textSize = 12f
+                    setTextColor(Ui.MUTED)
+                    background = RowButtonStyle.raised(this@MainActivity)
+                    setOnClickListener {
+                        verifyPin { requestWeakening("uninstall_unprotect:$pkg", "$label-এর আনইনস্টল-সুরক্ষা তোলা") }
+                    }
+                })
+                installCard.addView(row)
+            }
+        }
+        installCard.addView(Ui.secondaryButton(this, "সুরক্ষায় অ্যাপ যোগ করো") {
+            // FocusLock itself (already uninstall-blocked as the owner
+            // app), the system-critical packages, and apps already
+            // protected are not offered — same exclusions AdminHelper
+            // enforces when applying.
+            val already = Store.uninstallProtectedPkgs(this)
+            val apps = pickerApps().filter {
+                !AdminHelper.isProtectedPackage(this, it.first) && it.first !in already
+            }
+            if (apps.isEmpty()) {
+                toast("যোগ করার মতো কোনো অ্যাপ পাওয়া যায়নি")
+            } else {
+                val pkgs = apps.map { it.first }
+                val checked = BooleanArray(apps.size) { false }
+                AlertDialog.Builder(this).setTitle("কোন অ্যাপগুলো আনইনস্টল-সুরক্ষিত থাকবে?")
+                    .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, isChecked ->
+                        checked[i] = isChecked
+                    }
+                    .setPositiveButton("যোগ করো") { _, _ ->
+                        val selected = pkgs.filterIndexed { i, _ -> checked[i] }.toSet()
+                        if (selected.isNotEmpty()) {
+                            Store.saveUninstallProtectedPkgs(this, already + selected)
+                            AdminHelper.applyInstallControls(this)
+                            Store.logTamper(this, "Uninstall protection added: ${selected.joinToString()}")
+                            toast("${selected.size}টি অ্যাপ সুরক্ষিত হয়েছে")
+                            buildUi()
+                        }
+                    }
+                    .setNegativeButton("বাতিল", null).show()
+            }
+        })
+        content.addView(installCard)
+
         // ---- Automation API (v1.6.0, PhoneLink) ----
         val autoCard = Ui.card(this)
         autoCard.addView(Ui.cardTitle(this, "অটোমেশন (PhoneLink)"))
@@ -1160,6 +1259,9 @@ class MainActivity : AppCompatActivity() {
         action == "protection_off" -> "Protection Off করা"
         action == "remove_device_owner" -> "Device Owner সরানো"
         action == "allow_only_off" -> "শুধু-Allow মোড বন্ধ করা"
+        action == "install_block_off" -> "ইনস্টল ব্লক বন্ধ করা"
+        action.startsWith("uninstall_unprotect:") ->
+            "আনইনস্টল-সুরক্ষা তোলা: ${appLabel(action.removePrefix("uninstall_unprotect:"))}"
         action.startsWith("delete_schedule:") -> "শিডিউল মোছা"
         action.startsWith("raise_limit:") -> {
             val parts = action.removePrefix("raise_limit:").split(":")

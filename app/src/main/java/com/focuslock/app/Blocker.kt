@@ -26,13 +26,33 @@ object Blocker {
     /** Packages that always work, even in a full lock: calls and alarms are safety, not entertainment. */
     fun alwaysAllowed(ctx: Context): Set<String> {
         val set = mutableSetOf(ctx.packageName)
-        // System dialer / clock are resolved at runtime in AdminHelper + LockActivity;
-        // here we also whitelist the common system packages defensively.
+        // v1.10.0 bug fix (Tamim's report: dialer/clock would not open during
+        // focus): this list used to be ONLY the hardcoded names below, while
+        // AdminHelper resolved this phone's REAL default dialer/clock at
+        // runtime. On the Infinix (Transsion/XOS) the real packages are not
+        // in the hardcoded list, so the accessibility guard slammed the lock
+        // straight back over them. Now the runtime-resolved packages are
+        // included too — the same ones the LockTask whitelist already used.
+        try { AdminHelper.dialerPackage(ctx)?.let { set += it } } catch (_: Throwable) { }
+        try { set += AdminHelper.clockPackages(ctx) } catch (_: Throwable) { }
+        // The apps that actually handle the dial / alarms intents on THIS
+        // phone, whatever their package names are.
+        try {
+            val dial = android.content.Intent(android.content.Intent.ACTION_DIAL)
+            ctx.packageManager.resolveActivity(dial, 0)?.activityInfo?.packageName?.let { set += it }
+        } catch (_: Throwable) { }
+        try {
+            val alarms = android.content.Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS)
+            ctx.packageManager.resolveActivity(alarms, 0)?.activityInfo?.packageName?.let { set += it }
+        } catch (_: Throwable) { }
+        // Defensive hardcoded names (common + Transsion/XOS packages).
         set += listOf(
             "com.android.dialer", "com.google.android.dialer",
             "com.android.incallui", "com.samsung.android.dialer",
+            "com.transsion.dialer", "com.infinix.dialer",
             "com.google.android.deskclock", "com.android.deskclock",
-            "com.sec.android.app.clockpackage"
+            "com.sec.android.app.clockpackage",
+            "com.transsion.clock", "com.infinix.clock"
             // NOTE: Settings is deliberately NOT allowed — in Stage A (no Device Owner)
             // an open Settings screen would be a bypass route, so it gets blocked too.
             // SystemUI is also NOT in this set (v1.1): Tamim asked for the notification

@@ -73,6 +73,10 @@ object AdminHelper {
         }
         // v1.9.0: standing policies now include Chrome's managed config.
         syncBrowserRestrictions(ctx)
+        // v1.10.0: standing policies also include the install block and
+        // the per-app uninstall protections (forced re-apply here; the
+        // per-tick path inside is state-guarded).
+        applyInstallControls(ctx, force = true)
     }
 
     /**
@@ -190,6 +194,114 @@ object AdminHelper {
         }
     }
 
+    // ---- v1.10.0: install block + per-app uninstall protection ----
+
+    /** Both v1.10.0 Device Owner controls in one call. Safe anywhere:
+     *  no-op without Device Owner, every failure caught and tamper-logged,
+     *  and — thanks to the applied-state tracking in [Store] — no DPM
+     *  calls at all while nothing has changed, so the 1s engine tick can
+     *  call this freely. [force] re-applies unconditionally (used by
+     *  [applyStrictPolicies]: app start, owner verification). */
+    fun applyInstallControls(ctx: Context, force: Boolean = false) {
+        applyInstallBlock(ctx, force)
+        applyUninstallProtections(ctx, force)
+    }
+
+    /**
+     * Global install block: while [Store.installBlockOn] is set, the user
+     * cannot install ANY app — Play Store, other stores, or sideloaded
+     * APKs. Both restrictions go on/off together; exactly these two are
+     * cleared when the block is off, nothing else. The applied marker is
+     * written only after the DPM calls succeed, so a failure is retried
+     * on the next call instead of being mistaken for done.
+     */
+    fun applyInstallBlock(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val want = Store.installBlockOn(ctx)
+            if (!force && Store.installBlockApplied(ctx) == want) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            if (want) {
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS)
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            } else {
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS)
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            }
+            Store.setInstallBlockApplied(ctx, want)
+        } catch (e: Throwable) {
+            // Marker deliberately untouched: the change is retried later,
+            // never silently dropped and never crashes enforcement.
+            try { Store.logTamper(ctx, "applyInstallBlock failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /**
+     * Per-app uninstall protection: every package in
+     * [Store.uninstallProtectedPkgs] gets setUninstallBlocked(true);
+     * packages that leave the set (removal applies only after the PIN +
+     * 24h pending) get it lifted again. Only the DIFF against the
+     * verifiably-applied set is pushed to DPM, and each push is verified
+     * with isUninstallBlocked before it is recorded as applied.
+     * FocusLock itself and the system-critical packages are excluded —
+     * the owner app is already uninstall-blocked, and blocking Settings /
+     * launcher / dialer / clock / installer uninstall is meaningless or
+     * dangerous.
+     */
+    fun applyUninstallProtections(ctx: Context, force: Boolean = false) {
+        try {
+            if (!isDeviceOwner(ctx)) return
+            val dpm = dpm(ctx)
+            val admin = adminComponent(ctx)
+            val desired = Store.uninstallProtectedPkgs(ctx)
+                .filter { it != ctx.packageName && !isProtectedPackage(ctx, it) }
+                .toSet()
+            var applied = Store.uninstallProtectionsAppliedPkgs(ctx)
+            // Lift protection that is no longer wanted.
+            for (pkg in (applied - desired).toList()) {
+                if (setUninstallBlockedVerified(ctx, dpm, admin, pkg, false)) {
+                    applied = applied - pkg
+                }
+            }
+            // Apply protection that is wanted but not yet verifiably on.
+            val toBlock = if (force) desired else desired - applied
+            for (pkg in toBlock) {
+                if (setUninstallBlockedVerified(ctx, dpm, admin, pkg, true)) {
+                    applied = applied + pkg
+                }
+            }
+            if (applied != Store.uninstallProtectionsAppliedPkgs(ctx)) {
+                Store.saveUninstallProtectionsAppliedPkgs(ctx, applied)
+            }
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "applyUninstallProtections failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    /** setUninstallBlocked + read-back verification, in one guarded step.
+     *  A package that is no longer installed holds no uninstall state, so
+     *  it counts as done either way (nothing to protect, nothing to lift)
+     *  instead of failing and retrying forever. */
+    private fun setUninstallBlockedVerified(
+        ctx: Context,
+        dpm: DevicePolicyManager,
+        admin: ComponentName,
+        pkg: String,
+        blocked: Boolean
+    ): Boolean {
+        if (!isPackageInstalled(ctx, pkg)) return true
+        return try {
+            dpm.setUninstallBlocked(admin, pkg, blocked)
+            dpm.isUninstallBlocked(admin, pkg) == blocked
+        } catch (e: Throwable) {
+            try {
+                Store.logTamper(ctx, "setUninstallBlocked($pkg, $blocked) failed: ${e.message}")
+            } catch (_: Throwable) { }
+            false
+        }
+    }
+
     // ---- v1.5.1 safety: packages that must NEVER be suspended ----
     // Suspending one of these in Device Owner mode could strand the phone:
     // no launcher to go home to, no Settings to recover with, no dialer.
@@ -281,7 +393,10 @@ object AdminHelper {
             android.os.UserManager.DISALLOW_FACTORY_RESET,
             android.os.UserManager.DISALLOW_CONFIG_DATE_TIME,
             android.os.UserManager.DISALLOW_DEBUGGING_FEATURES,
-            android.os.UserManager.DISALLOW_ADD_USER
+            android.os.UserManager.DISALLOW_ADD_USER,
+            // v1.10.0: the install block must not survive owner removal.
+            android.os.UserManager.DISALLOW_INSTALL_APPS,
+            android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES
         )
         for (r in restrictions) {
             try { dpm.clearUserRestriction(admin, r) } catch (_: Throwable) { }
@@ -302,6 +417,21 @@ object AdminHelper {
         if (uninstallStillBlocked) {
             Store.logTamper(ctx, "Emergency exit ABORTED — uninstall still blocked")
             return false
+        }
+
+        // Stage 3b (v1.10.0): lift every per-app uninstall protection —
+        // VERIFIED per package, same abort rule: a protected app left
+        // blocked with no owner would be stranded.
+        val protectedPkgs =
+            (Store.uninstallProtectedPkgs(ctx) + Store.uninstallProtectionsAppliedPkgs(ctx)).distinct()
+        for (pkg in protectedPkgs) {
+            try { dpm.setUninstallBlocked(admin, pkg, false) } catch (_: Throwable) { }
+            val stillBlocked =
+                try { dpm.isUninstallBlocked(admin, pkg) } catch (_: Throwable) { false }
+            if (stillBlocked) {
+                Store.logTamper(ctx, "Emergency exit ABORTED — uninstall protection still on for $pkg")
+                return false
+            }
         }
 
         // Stage 4: restore every managed package (ledger ∪ current limits),
@@ -329,6 +459,14 @@ object AdminHelper {
             return false
         }
         try { dpm.removeActiveAdmin(admin) } catch (_: Throwable) { }
+        // v1.10.0: the DPM-side install controls are verifiably gone, so
+        // forget that they were ever applied. The DESIRED settings
+        // (installBlockOn, the protected list) stay saved — if Device
+        // Owner is ever set again, applyStrictPolicies re-applies them.
+        try {
+            Store.setInstallBlockApplied(ctx, null)
+            Store.saveUninstallProtectionsAppliedPkgs(ctx, emptySet())
+        } catch (_: Throwable) { }
         Store.logTamper(ctx, "Device Owner removed via in-app emergency exit (verified cleanup)")
         return true
     }

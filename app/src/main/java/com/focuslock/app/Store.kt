@@ -223,6 +223,24 @@ object Store {
                 saveSiteCategories(ctx, siteCategories(ctx) - id)
             }
             action == "allow_only_off" -> setSiteAllowOnly(ctx, false)
+            action == "install_block_off" -> {
+                // v1.10.0: the 24h delay has passed — the flag goes off and
+                // the DPM restrictions are lifted in the same tick
+                // (AdminHelper no-ops without Device Owner).
+                setInstallBlockOn(ctx, false)
+                AdminHelper.applyInstallControls(ctx)
+            }
+            action.startsWith("uninstall_unprotect:") -> {
+                // v1.10.0: protection removal is weakening (PIN + 24h).
+                // Dropping the package from the desired set makes
+                // applyInstallControls lift its uninstall-block (verified
+                // state diff inside AdminHelper).
+                val pkg = action.removePrefix("uninstall_unprotect:")
+                if (pkg.isNotBlank()) {
+                    saveUninstallProtectedPkgs(ctx, uninstallProtectedPkgs(ctx) - pkg)
+                    AdminHelper.applyInstallControls(ctx)
+                }
+            }
             action.startsWith("remove_limit:") -> {
                 val pkg = action.removePrefix("remove_limit:")
                 saveAppLimits(ctx, appLimits(ctx).filter { it.pkg != pkg })
@@ -350,6 +368,48 @@ object Store {
         ed.apply()
     }
 
+    // ---- v1.10.0: install block + per-app uninstall protection ----
+    // Both are Device Owner controls. The DESIRED state lives here; what
+    // AdminHelper has actually pushed into DevicePolicyManager is tracked
+    // separately below, so the engine tick can re-apply only on change
+    // instead of issuing DPM calls every second.
+
+    /** Global install block: while ON, no new app can be installed.
+     *  Turning ON is strengthening (immediate); turning OFF is weakening
+     *  and only happens via the "install_block_off" pending action. */
+    fun installBlockOn(ctx: Context): Boolean = prefs(ctx).getBoolean("install_block_on", false)
+    fun setInstallBlockOn(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean("install_block_on", on).apply()
+
+    /** Packages whose uninstall is blocked via setUninstallBlocked.
+     *  Adding is immediate; removing goes through the
+     *  "uninstall_unprotect:<pkg>" pending action (PIN + 24h). */
+    fun uninstallProtectedPkgs(ctx: Context): Set<String> = getPkgSet(ctx, "uninstall_protected_pkgs")
+    fun saveUninstallProtectedPkgs(ctx: Context, set: Set<String>) =
+        putPkgSet(ctx, "uninstall_protected_pkgs", set)
+
+    /** Last install-block state verifiably applied to DPM; null = never
+     *  applied in this ownership (or state unknown — apply again). */
+    fun installBlockApplied(ctx: Context): Boolean? {
+        val p = prefs(ctx)
+        if (!p.contains("install_block_applied")) return null
+        return p.getBoolean("install_block_applied", false)
+    }
+
+    fun setInstallBlockApplied(ctx: Context, on: Boolean?) {
+        val ed = prefs(ctx).edit()
+        if (on == null) ed.remove("install_block_applied")
+        else ed.putBoolean("install_block_applied", on)
+        ed.apply()
+    }
+
+    /** Packages whose uninstall-block is verifiably in place in DPM. */
+    fun uninstallProtectionsAppliedPkgs(ctx: Context): Set<String> =
+        getPkgSet(ctx, "uninstall_protected_applied")
+
+    fun saveUninstallProtectionsAppliedPkgs(ctx: Context, set: Set<String>) =
+        putPkgSet(ctx, "uninstall_protected_applied", set)
+
     // ---- v1.8.0: persisted DND restore state ----
     // Engine's "DND was applied, restore this filter afterwards" state used
     // to live only in memory: if the process died mid-lock (XOS kills
@@ -436,6 +496,8 @@ object Store {
         o.put("site_categories", org.json.JSONArray(siteCategories(ctx).toList()))
         o.put("site_allow_list", org.json.JSONArray(siteAllowList(ctx)))
         o.put("site_allow_only", siteAllowOnly(ctx))
+        o.put("install_block_on", installBlockOn(ctx))
+        o.put("uninstall_protected_pkgs", org.json.JSONArray(uninstallProtectedPkgs(ctx).toList()))
         return o.toString(2)
     }
 
@@ -468,6 +530,15 @@ object Store {
             strings("site_categories")?.let { saveSiteCategories(ctx, it.toSet()) }
             strings("site_allow_list")?.let { saveSiteAllowList(ctx, it) }
             bool("site_allow_only")?.let { setSiteAllowOnly(ctx, it) }
+            bool("install_block_on")?.let { setInstallBlockOn(ctx, it) }
+            strings("uninstall_protected_pkgs")?.let { list ->
+                // Same exclusions as the picker: FocusLock itself and the
+                // system-critical packages are never uninstall-protected
+                // through this feature (already blocked / meaningless).
+                saveUninstallProtectedPkgs(ctx, list.filter {
+                    it != ctx.packageName && !AdminHelper.isProtectedPackage(ctx, it)
+                }.toSet())
+            }
             logTamper(ctx, "Settings restored from backup file")
             true
         } catch (e: Exception) {
