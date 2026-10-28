@@ -520,7 +520,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("যোগ করো") { _, _ ->
                 var host = input.text.toString().trim().lowercase()
                     .removePrefix("https://").removePrefix("http://").removePrefix("www.")
-                host = host.substringBefore("/").substringBefore("?")
+                // v1.8.0 audit: strip a ":port" suffix too — "bbc.com:8080"
+                // used to be stored whole and then never matched the
+                // browser's bare host.
+                host = host.substringBefore("/").substringBefore("?").substringBefore(":")
                 if (host.isBlank() || !host.contains(".")) {
                     toast("ঠিকমতো সাইটের নাম দাও, যেমন bbc.com")
                 } else {
@@ -542,7 +545,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("ব্লক করো") { _, _ ->
                 var host = input.text.toString().trim().lowercase()
                     .removePrefix("https://").removePrefix("http://").removePrefix("www.")
-                host = host.substringBefore("/").substringBefore("?")
+                // v1.8.0 audit: strip a ":port" suffix too — "bbc.com:8080"
+                // used to be stored whole and then never matched the
+                // browser's bare host.
+                host = host.substringBefore("/").substringBefore("?").substringBefore(":")
                 if (host.isBlank() || !host.contains(".")) {
                     toast("ঠিকমতো সাইটের নাম দাও, যেমন facebook.com")
                 } else {
@@ -603,6 +609,61 @@ class MainActivity : AppCompatActivity() {
         }
         permCard.addView(Ui.statusRow(this, "Device Owner (Stage B)", AdminHelper.isDeviceOwner(this)))
         content.addView(permCard)
+
+        // ---- v1.8.0: Device Owner activation guide (Dhizuku-style setup) ----
+        // Android gives NO app a self-grant permission tap for Device Owner —
+        // not even Dhizuku: it too relies on the same one-time shell-level
+        // set-device-owner, just triggered via Shizuku instead of a typed
+        // command. This card is the honest in-app version of that setup:
+        // status + checklist + both command paths + a verify button. The
+        // one-tap Shizuku trigger itself is NOT implemented (see the v1.8.0
+        // audit report for exactly why and what it would take) — this card
+        // never pretends otherwise. SETUP ONLY: it adds no removal path;
+        // owner removal stays PIN + 24h in the সুরক্ষা card below.
+        if (!AdminHelper.isDeviceOwner(this)) {
+            val ownerCard = Ui.card(this)
+            ownerCard.addView(Ui.cardTitle(this, "Device Owner চালু করা (Stage B)"))
+            ownerCard.addView(Ui.statusRow(this, "Device Owner অবস্থা", false, "চালু আছে", "এখনো হয়নি"))
+            ownerCard.addView(Ui.secondary(this,
+                "Device Owner চালু হলেই FocusLock সবচেয়ে কড়া হয় — আনইনস্টল, ফোর্স-স্টপ, Settings, তারিখ-সময় বদল সব বন্ধ হয়ে যায়। " +
+                    "চালু করা একবারের কাজ, আর কোনো অ্যাপই শুধু এক ট্যাপে এই অনুমতি পায় না — Android-এর নিয়মে একবার শেল-স্তরের কমান্ড লাগেই (Dhizuku-র ক্ষেত্রেও একই নিয়ম, শুধু কমান্ডটা Shizuku দিয়ে চালানো হয়)।"))
+            ownerCard.addView(Ui.gap(this, 8))
+            ownerCard.addView(Ui.body(this, "চালু করার আগের চেকলিস্ট"))
+            ownerCard.addView(Ui.secondary(this,
+                "১) আগে পুরো ব্যাকআপ নাও — সেটিংস ব্যাকআপ (নিচের কার্ডে) আর গুরুত্বপূর্ণ ফাইলের কপি।\n" +
+                    "২) ফোনের সব অ্যাকাউন্ট (Googleসহ সব) সাময়িকভাবে সরাও — অ্যাকাউন্ট থাকলে Android Device Owner বসাতে দেয় না।\n" +
+                    "৩) কমান্ডটা চালাও (নিচে দুটো পথ)।\n" +
+                    "৪) চালু হলে অ্যাকাউন্টগুলো আবার যোগ করো, তারপর এখানে 'যাচাই করো' চাপো।"))
+            ownerCard.addView(Ui.gap(this, 8))
+            ownerCard.addView(Ui.body(this, "কমান্ড"))
+            ownerCard.addView(Ui.secondary(this, "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"))
+            ownerCard.addView(Ui.secondaryButton(this, "কমান্ড কপি করো") {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("FocusLock ADB",
+                    "adb shell dpm set-device-owner com.focuslock.app/.AdminReceiver"))
+                toast("কপি হয়েছে")
+            })
+            ownerCard.addView(Ui.gap(this, 8))
+            ownerCard.addView(Ui.body(this, "কোন পথে চালাবে"))
+            ownerCard.addView(Ui.secondary(this,
+                "পথ ১ — PC থেকে: ফোন USB দিয়ে কম্পিউটারে লাগিয়ে উপরের কমান্ডটা চালাও।\n" +
+                    "পথ ২ — ফোন থেকেই (Termux + Shizuku): Shizuku চালু অবস্থায় Termux-এ rish দিয়ে প্রিভিলেজড শেল খুলে শুধু dpm অংশটা চালাও:\n" +
+                    "dpm set-device-owner com.focuslock.app/.AdminReceiver\n" +
+                    "ডিবাগিং চালুই থাকবে — FocusLock ইচ্ছা করেই ডিবাগিং বন্ধ করে না, যাতে Termux/Shizuku চলতে পারে।"))
+            ownerCard.addView(Ui.primaryButton(this, "যাচাই করো") {
+                if (AdminHelper.isDeviceOwner(this@MainActivity)) {
+                    // Owner just landed: all restrictions go on together,
+                    // through the same path AdminReceiver.onEnabled uses.
+                    AdminHelper.applyStrictPolicies(this@MainActivity)
+                    Engine.tick(this@MainActivity)
+                    toast("Device Owner চালু আছে — সব restriction একসাথে চালু করা হয়েছে")
+                } else {
+                    toast("এখনো চালু হয়নি — কমান্ডটা চালিয়ে আবার যাচাই করো")
+                }
+                buildUi()
+            })
+            content.addView(ownerCard)
+        }
 
         val securityCard = Ui.card(this)
         securityCard.addView(Ui.cardTitle(this, "সুরক্ষা"))
@@ -735,7 +796,7 @@ class MainActivity : AppCompatActivity() {
             row.addView(Button(this).apply {
                 text = "মুছুন"; isAllCaps = false; textSize = 12f
                 setTextColor(Ui.MUTED)
-                background = GradientDrawableHelper.raised(this@MainActivity)
+                background = RowButtonStyle.raised(this@MainActivity)
                 setOnClickListener {
                     verifyPin {
                         requestWeakening("delete_schedule:${s.id}", "শিডিউল মোছা (${s.label})")
@@ -834,10 +895,13 @@ class MainActivity : AppCompatActivity() {
     private fun launcherApps(): List<String> {
         val pm = packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        val pkgs = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
             .map { it.activityInfo.packageName }.distinct()
             .filter { it != packageName }
-            .sortedBy { appLabel(it) }
+        // v1.8.0 audit: labels resolved once per package — sortedBy used to
+        // re-call appLabel (a PackageManager lookup) on every comparison.
+        return pkgs.map { it to appLabel(it) }
+            .sortedBy { it.second.lowercase() }.map { it.first }
     }
 
     /**
@@ -849,34 +913,45 @@ class MainActivity : AppCompatActivity() {
      */
     private fun pickerApps(): List<Pair<String, String>> {
         val pm = packageManager
-        val launcher = launcherApps()
-        val result = launcher.map { it to appLabel(it) }.toMutableList()
-        val seen = launcher.toSet()
-        val extras = try {
+        // v1.8.0 audit: every label is now resolved exactly once (the old
+        // code called appLabel inside filters AND sorts AND again when
+        // building the result — several PackageManager lookups per app,
+        // a visible stall when the picker opens on a full phone). The
+        // `seen` set also dedupes within the installed-apps list itself,
+        // so a package can never appear twice in the picker.
+        val launcherPairs = launcherApps().map { it to appLabel(it) }
+        val seen = launcherPairs.map { it.first }.toMutableSet()
+        val extraPairs = try {
             pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { it.packageName !in seen && it.packageName != packageName }
                 .filter {
                     (it.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or
                         android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
                 }
                 .filter { it.enabled }
                 .filter {
-                    !it.packageName.startsWith("com.android.providers.") &&
+                    it.packageName != packageName &&
+                        !it.packageName.startsWith("com.android.providers.") &&
                         !it.packageName.contains("overlay") &&
                         it.packageName != "android"
                 }
-                .filter { appLabel(it.packageName).isNotBlank() }
                 .map { it.packageName }
-                .sortedBy { appLabel(it) }
+                .filter { seen.add(it) }
+                .map { it to appLabel(it) }
+                .filter { it.second.isNotBlank() }
+                .sortedBy { it.second.lowercase() }
         } catch (e: Exception) {
             emptyList()
         }
-        for (pkg in extras) result.add(pkg to (appLabel(pkg) + " (সিস্টেম)"))
-        return result
+        return launcherPairs + extraPairs.map { it.first to (it.second + " (সিস্টেম)") }
     }
 
     private fun pickAppsMulti(title: String, preselected: Set<String>, cb: (Set<String>) -> Unit) {
         val apps = pickerApps()
+        // v1.8.0 polish: a clear empty state instead of a blank dialog.
+        if (apps.isEmpty()) {
+            toast("কোনো অ্যাপ পাওয়া যায়নি")
+            return
+        }
         val pkgs = apps.map { it.first }
         val checked = BooleanArray(apps.size) { i -> pkgs[i] in preselected }
         AlertDialog.Builder(this).setTitle(title)
@@ -924,7 +999,7 @@ class MainActivity : AppCompatActivity() {
             row.addView(Button(this).apply {
                 text = "তুলে নিন"; isAllCaps = false; textSize = 12f
                 setTextColor(Ui.MUTED)
-                background = GradientDrawableHelper.raised(this@MainActivity)
+                background = RowButtonStyle.raised(this@MainActivity)
                 setOnClickListener {
                     verifyPin { requestWeakening("remove_limit:${limit.pkg}", "$label-এর লিমিট তোলা") }
                 }
@@ -943,6 +1018,11 @@ class MainActivity : AppCompatActivity() {
         // are not offered — suspending one could strand the phone.
         // v1.7.0: pickerApps() also lists system apps (marked সিস্টেম).
         val apps = pickerApps().filter { !AdminHelper.isProtectedPackage(this, it.first) }
+        // v1.8.0 polish: a clear empty state instead of a blank dialog.
+        if (apps.isEmpty()) {
+            toast("লিমিট বসানোর মতো কোনো অ্যাপ পাওয়া যায়নি")
+            return
+        }
         AlertDialog.Builder(this).setTitle("কোন অ্যাপে লিমিট?")
             .setItems(apps.map { it.second }.toTypedArray()) { _, which ->
                 val pkg = apps[which].first
@@ -950,8 +1030,12 @@ class MainActivity : AppCompatActivity() {
                 AlertDialog.Builder(this).setTitle("${apps[which].second} — লিমিট").setView(input)
                     .setPositiveButton("বসাও") { _, _ ->
                         val mins = input.text.toString().toIntOrNull()
-                        if (mins == null || mins <= 0) {
-                            toast("সঠিক মিনিট দাও")
+                        // v1.8.0 audit: cap at a full day — a daily limit
+                        // above 1440 minutes can never trigger and only
+                        // stored nonsense (and overflowed the same range
+                        // AppLimit.parse now enforces on load).
+                        if (mins == null || mins !in 1..1440) {
+                            toast("1 থেকে 1440 মিনিটের মধ্যে দাও")
                         } else {
                             val existing = Store.appLimits(this).firstOrNull { it.pkg == pkg }
                             if (existing != null && mins > existing.limitMinutes) {
@@ -982,8 +1066,11 @@ class MainActivity : AppCompatActivity() {
             .setMessage("এই PIN ছাড়া কোনো সুরক্ষা দুর্বল করা যাবে না। PIN ভুলে গেলে একমাত্র উপায় ফ্যাক্টরি রিসেট।")
             .setPositiveButton("সেট") { _, _ ->
                 val pin = input.text.toString()
-                if (pin.length < 4) {
-                    toast("কমপক্ষে 4 সংখ্যা লাগবে")
+                // v1.8.0 audit: the dialog itself promises "4-8 সংখ্যার
+                // PIN" but only the minimum was enforced — a 20-digit PIN
+                // was accepted, contradicting the on-screen rule.
+                if (pin.length !in 4..8) {
+                    toast("4 থেকে 8 সংখ্যার PIN দাও")
                 } else {
                     Store.setPin(this, pin)
                     Store.logTamper(this, "PIN set/changed")
@@ -1053,9 +1140,33 @@ class MainActivity : AppCompatActivity() {
         buildUi()
     }
 
+    /** v1.8.0 polish: the Pending row used to print the raw internal action
+     *  string ("raise_limit:com.example:60") at the user. Same information,
+     *  in plain Bangla. */
+    private fun pendingDescription(action: String): String = when {
+        action == "protection_off" -> "Protection Off করা"
+        action == "remove_device_owner" -> "Device Owner সরানো"
+        action == "allow_only_off" -> "শুধু-Allow মোড বন্ধ করা"
+        action.startsWith("delete_schedule:") -> "শিডিউল মোছা"
+        action.startsWith("raise_limit:") -> {
+            val parts = action.removePrefix("raise_limit:").split(":")
+            if (parts.size == 2) "লিমিট বাড়ানো: ${appLabel(parts[0])} → ${parts[1]} মিনিট"
+            else "লিমিট বাড়ানো"
+        }
+        action.startsWith("remove_limit:") ->
+            "লিমিট তোলা: ${appLabel(action.removePrefix("remove_limit:"))}"
+        action.startsWith("remove_site:") ->
+            "ওয়েবসাইট ব্লক তোলা: ${action.removePrefix("remove_site:")}"
+        action.startsWith("remove_category:") -> {
+            val id = action.removePrefix("remove_category:")
+            "ক্যাটাগরি ফিল্টার তোলা: ${SiteCategories.byId(id)?.labelBn ?: id}"
+        }
+        else -> "সুরক্ষা পরিবর্তন"
+    }
+
     private fun pendingInfo(card: LinearLayout) {
         val (action, at) = Store.pendingAction(this) ?: return
-        card.addView(Ui.secondary(this, "Pending পরিবর্তন: $action\nকার্যকর হবে: ${timeText(at)} (${Blocker.formatRemaining(at)} বাকি)"))
+        card.addView(Ui.secondary(this, "Pending পরিবর্তন: ${pendingDescription(action)}\nকার্যকর হবে: ${timeText(at)} (${Blocker.formatRemaining(at)} বাকি)"))
         card.addView(Ui.secondaryButton(this, "Pending বাতিল করো") {
             verifyPin {
                 Store.clearPendingAction(this)
@@ -1067,8 +1178,11 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-/** Small raised-pill background for inline row buttons (design system). */
-object GradientDrawableHelper {
+/** Small raised-pill background for inline row buttons (design system).
+ *  v1.8.0 audit: renamed from GradientDrawableHelper — the drawable is a
+ *  solid fill with a hairline stroke (the design system bans gradients);
+ *  the old name described the opposite of what it draws. */
+object RowButtonStyle {
     fun raised(ctx: Context): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
