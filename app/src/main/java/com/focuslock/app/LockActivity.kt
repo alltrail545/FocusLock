@@ -67,7 +67,17 @@ class LockActivity : Activity() {
 
     private val tick = object : Runnable {
         override fun run() {
-            val state = Blocker.currentBlock(this@LockActivity)
+            // v1.8.0 audit: currentBlock() was called unguarded — one
+            // exception ended this runnable's chain for good: the countdown
+            // froze and the lock could neither refresh nor finish cleanly.
+            // On error we keep the lock exactly as it is (last safe state)
+            // and simply look again in a second.
+            val state = try {
+                Blocker.currentBlock(this@LockActivity)
+            } catch (_: Throwable) {
+                handler.postDelayed(this, 1000)
+                return
+            }
             when (state) {
                 is BlockState.Full -> {
                     reasonView.text = state.reason
@@ -171,7 +181,11 @@ class LockActivity : Activity() {
                 })
             } catch (e: Exception) {
                 try {
-                    startActivity(packageManager.getLaunchIntentForPackage("com.google.android.deskclock")!!)
+                    // v1.8.0 audit: was a force-unwrap (!!) on a nullable
+                    // launch intent — the only one in the codebase. It was
+                    // inside a try/catch, but a safe call says what it does.
+                    packageManager.getLaunchIntentForPackage("com.google.android.deskclock")
+                        ?.let { startActivity(it) }
                 } catch (_: Exception) { }
             }
         })
