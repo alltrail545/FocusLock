@@ -38,7 +38,7 @@
             android:layout_weight="1"
             android:background="@drawable/widget_btn_primary"
             android:text="25 মিনিট"
-            android:textColor="#0B1512"
+            android:textColor="#101415"
             android:textSize="13sp" />
 
         <Button
