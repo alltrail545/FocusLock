@@ -51,7 +51,22 @@ class FocusWidgetActions : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_START_FOCUS) return
         val minutes = intent.getIntExtra(EXTRA_MINUTES, 25)
+        if (minutes !in 1..1440) {
+            Store.logTamper(context, "Widget focus ignored (bad minutes: $minutes)")
+            return
+        }
         val now = System.currentTimeMillis()
+        // v1.8.0 audit — STRICTNESS HOLE: the widget asks for no PIN, and it
+        // used to overwrite a running session unconditionally. Starting a
+        // long focus and then tapping "25 মিনিট" on the widget shortened
+        // the un-cancellable session to 25 minutes (and swapped its app
+        // whitelist) with no PIN at all. AutomationReceiver.startSession
+        // already refuses in this case; the widget now does the same —
+        // while a session runs, a widget tap changes nothing.
+        if (Store.focusEndMs(context) > now) {
+            Store.logTamper(context, "Widget focus ignored (a session is already running)")
+            return
+        }
         val allowed = Store.focusDefaultAllowed(context)
         Store.setFocusStartMs(context, now)
         Store.setFocusEndMs(context, now + minutes * 60_000L)
