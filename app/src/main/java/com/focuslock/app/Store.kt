@@ -22,12 +22,18 @@ data class Schedule(
         fun parse(s: String): Schedule? {
             val p = s.split("|")
             if (p.size != 6) return null
+            // v1.8.0 audit: range-validate — a corrupt/imported row with
+            // times outside a day (e.g. 25:70) used to load as a schedule
+            // whose window math could never fire (or fired wrongly).
+            val start = p[2].toIntOrNull() ?: return null
+            val end = p[3].toIntOrNull() ?: return null
+            if (start !in 0..1439 || end !in 0..1439) return null
             return Schedule(
                 p[0].toLongOrNull() ?: return null,
                 p[1],
-                p[2].toIntOrNull() ?: return null,
-                p[3].toIntOrNull() ?: return null,
-                p[4].toIntOrNull() ?: 127,
+                start,
+                end,
+                (p[4].toIntOrNull() ?: 127).coerceIn(0, 127),
                 p[5] == "1"
             )
         }
@@ -40,7 +46,14 @@ data class AppLimit(val pkg: String, val limitMinutes: Int) {
         fun parse(s: String): AppLimit? {
             val p = s.split("|")
             if (p.size != 2) return null
-            return AppLimit(p[0], p[1].toIntOrNull() ?: return null)
+            if (p[0].isBlank()) return null
+            // v1.8.0 audit: a limit of 0 or negative minutes (corrupt or
+            // hand-edited backup) made usedMin >= limit true at 0 usage —
+            // the app was blocked all day from the first tick. More than a
+            // day's minutes can never be a real daily limit either.
+            val mins = p[1].toIntOrNull() ?: return null
+            if (mins !in 1..1440) return null
+            return AppLimit(p[0], mins)
         }
     }
 }
@@ -55,9 +68,14 @@ data class FocusPreset(val name: String, val minutes: Int, val allowed: Set<Stri
         fun parse(s: String): FocusPreset? {
             val p = s.split("|")
             if (p.size != 3) return null
+            // v1.8.0 audit: same range rule the preset UI enforces (1..1440);
+            // a 0/negative-minutes preset would start an already-expired
+            // session, an absurd one would lock for days.
+            val mins = p[1].toIntOrNull() ?: return null
+            if (mins !in 1..1440) return null
             return FocusPreset(
                 p[0],
-                p[1].toIntOrNull() ?: return null,
+                mins,
                 if (p[2].isBlank()) emptySet() else p[2].split(",").filter { it.isNotBlank() }.toSet()
             )
         }
@@ -151,6 +169,15 @@ object Store {
     /** Runs the pending action if its 24h delay has passed. Called by the blocking engine. */
     fun applyPendingIfDue(ctx: Context) {
         val (action, at) = pendingAction(ctx) ?: return
+        // v1.8.0 audit: a pending row whose execute-time was lost (corrupt
+        // prefs) read as at=0 — "long past due" — and the weakening change
+        // applied IMMEDIATELY, silently bypassing the 24h rule. An invalid
+        // pending row is dropped, never applied.
+        if (at <= 0L) {
+            logTamper(ctx, "Invalid pending change dropped (no execute time): $action")
+            clearPendingAction(ctx)
+            return
+        }
         if (System.currentTimeMillis() < at) return
         when {
             action == "protection_off" -> setProtectionOn(ctx, false)
@@ -161,20 +188,30 @@ object Store {
                 setExitFailed(ctx, !ok)
             }
             action.startsWith("delete_schedule:") -> {
-                val id = action.removePrefix("delete_schedule:").toLongOrNull() ?: return
-                saveSchedules(ctx, schedules(ctx).filter { it.id != id })
+                // v1.8.0 audit: this used to `return` on an unparsable id,
+                // which skipped clearPendingAction below — the dead pending
+                // row was retried on EVERY engine tick forever. A malformed
+                // action is now skipped and the row is cleared as usual.
+                val id = action.removePrefix("delete_schedule:").toLongOrNull()
+                if (id != null) {
+                    saveSchedules(ctx, schedules(ctx).filter { it.id != id })
+                }
             }
             action.startsWith("raise_limit:") -> {
                 val parts = action.removePrefix("raise_limit:").split(":")
                 if (parts.size == 2) {
-                    val mins = parts[1].toIntOrNull() ?: return
-                    val list = appLimits(ctx).map {
-                        if (it.pkg == parts[0]) it.copy(limitMinutes = mins) else it
+                    // Same stuck-pending fix as delete_schedule above, plus
+                    // the 1..1440 range rule for a daily limit.
+                    val mins = parts[1].toIntOrNull()
+                    if (mins != null && mins in 1..1440) {
+                        val list = appLimits(ctx).map {
+                            if (it.pkg == parts[0]) it.copy(limitMinutes = mins) else it
+                        }
+                        saveAppLimits(ctx, list)
+                        // v1.5.1: if the app is suspended but now under its new
+                        // limit, lift the suspension together with the raise.
+                        AdminHelper.refreshSuspensions(ctx)
                     }
-                    saveAppLimits(ctx, list)
-                    // v1.5.1: if the app is suspended but now under its new
-                    // limit, lift the suspension together with the raise.
-                    AdminHelper.refreshSuspensions(ctx)
                 }
             }
             action.startsWith("remove_site:") -> {
@@ -242,7 +279,7 @@ object Store {
         (prefs(ctx).getString("timed_app_blocks", "") ?: "")
             .split(";").filter { it.isNotBlank() }.mapNotNull {
                 val p = it.split("=")
-                if (p.size == 2) {
+                if (p.size == 2 && p[0].isNotBlank()) {
                     val until = p[1].toLongOrNull() ?: return@mapNotNull null
                     p[0] to until
                 } else null
@@ -285,6 +322,27 @@ object Store {
         prefs(ctx).edit().putBoolean("site_allow_only", on).apply()
 
 
+    // ---- v1.8.0: persisted DND restore state ----
+    // Engine's "DND was applied, restore this filter afterwards" state used
+    // to live only in memory: if the process died mid-lock (XOS kills
+    // background apps), the phone stayed on the alarms-only filter forever
+    // after the lock ended, with nothing left to restore it. Persisted now.
+    fun dndPreviousFilter(ctx: Context): Int? {
+        val p = prefs(ctx)
+        if (!p.getBoolean("dnd_applied", false)) return null
+        return p.getInt("dnd_prev_filter", android.app.NotificationManager.INTERRUPTION_FILTER_ALL)
+    }
+
+    fun setDndPreviousFilter(ctx: Context, filter: Int?) {
+        val ed = prefs(ctx).edit()
+        if (filter == null) {
+            ed.remove("dnd_applied").remove("dnd_prev_filter")
+        } else {
+            ed.putBoolean("dnd_applied", true).putInt("dnd_prev_filter", filter)
+        }
+        ed.apply()
+    }
+
     /** Transient: a blocked site is being shown the lock screen until this time. */
     @Volatile var siteBlockUntilMs: Long = 0L
     @Volatile var siteBlockHost: String = ""
@@ -303,7 +361,10 @@ object Store {
         val map = focusHistory(ctx).toMutableMap()
         val key = dayKey()
         map[key] = (map[key] ?: 0) + minutes
-        val ser = map.entries.sortedBy { it.key }
+        // v1.8.0 audit: history grew one entry per day, forever — the stored
+        // string (and every parse of it) grew unbounded. Only the last 400
+        // days can matter (7-day totals + any realistic streak).
+        val ser = map.entries.sortedBy { it.key }.takeLast(400)
             .joinToString(";") { "${it.key}=${it.value}" }
         prefs(ctx).edit().putString("focus_history", ser).apply()
     }
@@ -351,39 +412,34 @@ object Store {
     }
 
     fun importJson(ctx: Context, json: String): Boolean {
+        // v1.8.0 audit: the file comes from a user-picked document — cap its
+        // size so a huge/corrupt pick cannot OOM the restore, and read every
+        // value type-safely. The old code used getBoolean/getString, which
+        // THROW on a wrong-typed value mid-import: sections before the bad
+        // one were already saved, then the import reported failure — a
+        // half-applied restore. Now a wrong-typed section is skipped and
+        // every other section still applies cleanly.
+        if (json.length > 1_000_000) return false
         return try {
             val o = org.json.JSONObject(json)
-            if (o.has("protection_on")) setProtectionOn(ctx, o.getBoolean("protection_on"))
-            if (o.has("silence_during_lock")) setSilenceDuringLock(ctx, o.getBoolean("silence_during_lock"))
-            if (o.has("schedules")) {
-                val arr = o.getJSONArray("schedules")
-                saveSchedules(ctx, (0 until arr.length()).mapNotNull { Schedule.parse(arr.getString(it)) })
+            fun bool(key: String): Boolean? =
+                if (o.opt(key) is Boolean) o.getBoolean(key) else null
+            fun strings(key: String): List<String>? {
+                val arr = o.optJSONArray(key) ?: return null
+                return (0 until arr.length()).mapNotNull {
+                    arr.optString(it).takeIf { s -> s.isNotBlank() }
+                }
             }
-            if (o.has("app_limits")) {
-                val arr = o.getJSONArray("app_limits")
-                saveAppLimits(ctx, (0 until arr.length()).mapNotNull { AppLimit.parse(arr.getString(it)) })
-            }
-            if (o.has("focus_default_allowed")) {
-                val arr = o.getJSONArray("focus_default_allowed")
-                saveFocusDefaultAllowed(ctx, (0 until arr.length()).map { arr.getString(it) }.toSet())
-            }
-            if (o.has("focus_presets")) {
-                val arr = o.getJSONArray("focus_presets")
-                saveFocusPresets(ctx, (0 until arr.length()).mapNotNull { FocusPreset.parse(arr.getString(it)) })
-            }
-            if (o.has("blocked_sites")) {
-                val arr = o.getJSONArray("blocked_sites")
-                saveBlockedSites(ctx, (0 until arr.length()).map { arr.getString(it) })
-            }
-            if (o.has("site_categories")) {
-                val arr = o.getJSONArray("site_categories")
-                saveSiteCategories(ctx, (0 until arr.length()).map { arr.getString(it) }.toSet())
-            }
-            if (o.has("site_allow_list")) {
-                val arr = o.getJSONArray("site_allow_list")
-                saveSiteAllowList(ctx, (0 until arr.length()).map { arr.getString(it) })
-            }
-            if (o.has("site_allow_only")) setSiteAllowOnly(ctx, o.getBoolean("site_allow_only"))
+            bool("protection_on")?.let { setProtectionOn(ctx, it) }
+            bool("silence_during_lock")?.let { setSilenceDuringLock(ctx, it) }
+            strings("schedules")?.let { saveSchedules(ctx, it.mapNotNull { s -> Schedule.parse(s) }) }
+            strings("app_limits")?.let { saveAppLimits(ctx, it.mapNotNull { s -> AppLimit.parse(s) }) }
+            strings("focus_default_allowed")?.let { saveFocusDefaultAllowed(ctx, it.toSet()) }
+            strings("focus_presets")?.let { saveFocusPresets(ctx, it.mapNotNull { s -> FocusPreset.parse(s) }) }
+            strings("blocked_sites")?.let { saveBlockedSites(ctx, it) }
+            strings("site_categories")?.let { saveSiteCategories(ctx, it.toSet()) }
+            strings("site_allow_list")?.let { saveSiteAllowList(ctx, it) }
+            bool("site_allow_only")?.let { setSiteAllowOnly(ctx, it) }
             logTamper(ctx, "Settings restored from backup file")
             true
         } catch (e: Exception) {
