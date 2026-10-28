@@ -76,13 +76,28 @@ object SiteCategories {
     fun hostOf(urlText: String): String {
         var host = urlText.trim().lowercase()
             .removePrefix("https://").removePrefix("http://")
+        // v1.8.0 audit: also strip any userinfo ("user@host") and a trailing
+        // root dot ("facebook.com." is the same host as "facebook.com") —
+        // both used to survive normalisation and slip past exact matching.
         return host.substringBefore("/").substringBefore("?").substringBefore("#")
-            .substringBefore(":").trim()
+            .substringBefore(":").substringAfterLast("@").trim().trimEnd('.')
     }
 
+    /**
+     * Normalise a stored domain the same way [hostOf] normalises a live
+     * host: case, scheme, path/port and a leading "www." all come off.
+     * v1.8.0 audit: an allow-list entry stored as "www.bbc.com" (e.g. from
+     * a hand-edited backup) never matched the browser's "bbc.com" host, so
+     * an allow-listed site was blocked anyway; a category/block entry with
+     * stray case or a port had the mirror-image problem.
+     */
+    private fun normalizeDomain(domain: String): String =
+        hostOf(domain).removePrefix("www.")
+
     fun hostMatches(urlText: String, domain: String): Boolean {
-        val host = hostOf(urlText)
-        if (host.isBlank()) return false
-        return host == domain || host.endsWith(".$domain")
+        val host = hostOf(urlText).removePrefix("www.")
+        val dom = normalizeDomain(domain)
+        if (host.isBlank() || dom.isBlank()) return false
+        return host == dom || host.endsWith(".$dom")
     }
 }
