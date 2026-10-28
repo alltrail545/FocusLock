@@ -29,11 +29,28 @@ import java.security.MessageDigest
 class AutomationReceiver : BroadcastReceiver() {
 
     override fun onReceive(ctx: Context, intent: Intent) {
+        // v1.8.0 audit: dispatch unguarded — an exception from a store or
+        // engine call crashed the receiver (and the process) mid-command.
+        // A rejected/dropped command is always safer than a dead process.
+        try {
+            onReceiveGuarded(ctx, intent)
+        } catch (e: Throwable) {
+            try { Store.logTamper(ctx, "Automation command failed: ${e.message}") } catch (_: Throwable) { }
+        }
+    }
+
+    private fun onReceiveGuarded(ctx: Context, intent: Intent) {
         if (intent.action != ACTION) return
         val storedHash = Store.automationTokenHash(ctx)
         if (storedHash.isBlank()) return // API stays off until a token is set
         val token = intent.getStringExtra("token") ?: ""
-        if (token.isBlank() || sha256(token) != storedHash) {
+        // v1.8.0 audit: constant-time comparison (MessageDigest.isEqual)
+        // instead of String !=, so the hash check leaks no timing signal.
+        val tokenOk = token.isNotBlank() && MessageDigest.isEqual(
+            sha256(token).toByteArray(Charsets.UTF_8),
+            storedHash.toByteArray(Charsets.UTF_8)
+        )
+        if (!tokenOk) {
             Store.logTamper(ctx, "Automation command rejected (bad token)")
             return
         }
